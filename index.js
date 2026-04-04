@@ -61,9 +61,11 @@ app.post("/slack/events", async (req, res) => {
         }],
         // ⚡️ FIXED: New Gemini 3 JSON Structure ⚡️
         generationConfig: {
+          maxOutputTokens: 1500,  
+          temperature: 0.7,
           thinkingConfig: {
             includeThoughts: false, // Keeps the response clean for Slack
-            thinkingLevel: "high"    // Activates the strategic reasoning you wanted
+            thinkingLevel: "HIGH"    // Activates the strategic reasoning you wanted
           }
         }
       });
