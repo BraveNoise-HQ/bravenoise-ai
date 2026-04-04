@@ -10,10 +10,6 @@ const PORT = process.env.PORT || 3000;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 
-if (!GEMINI_API_KEY || !SLACK_BOT_TOKEN) {
-  console.error("❌ ERROR: Missing GEMINI_API_KEY or SLACK_BOT_TOKEN.");
-}
-
 let designSpecs = "Follow high-converting, modern minimalist design principles.";
 try {
   if (fs.existsSync("./DESIGN.md")) {
@@ -24,14 +20,12 @@ try {
 }
 
 app.get("/", (req, res) => {
-  res.send("BraveNoise AI is online and listening! 🚀");
+  res.send("BraveNoise AI is alive and ready for revenue! 🚀");
 });
 
 app.post("/slack/events", async (req, res) => {
   const body = req.body;
-  if (body.type === "url_verification") {
-    return res.send({ challenge: body.challenge });
-  }
+  if (body.type === "url_verification") return res.send({ challenge: body.challenge });
 
   try {
     const event = body.event;
@@ -39,15 +33,16 @@ app.post("/slack/events", async (req, res) => {
       const userMessage = event.text;
       const channelId = event.channel;
 
-      console.log(`📩 Message from Slack: "${userMessage}"`);
+      console.log(`📩 Processing message: "${userMessage}"`);
 
-      // 🔥 UPDATED URL: Changed v1beta to v1
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+      // 🔥 FIX: Changed model to 'gemini-1.5-flash-latest' and used v1beta endpoint
+      // This alias is more resilient to model retirements.
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
       
       const response = await axios.post(geminiUrl, {
         contents: [{
           parts: [{
-            text: `System Instruction: You are BraveNoise AI. Priority: Etsy/Printify revenue. Brand: ${designSpecs}. User Message: ${userMessage}`
+            text: `System: You are BraveNoise AI. Mission: Etsy/Printify revenue. Guidelines: ${designSpecs}. User: ${userMessage}`
           }]
         }]
       });
@@ -67,7 +62,6 @@ app.post("/slack/events", async (req, res) => {
     }
     res.sendStatus(200);
   } catch (error) {
-    // Log the full error to help us debug if it fails again
     console.error("❌ API Error:", error.response ? JSON.stringify(error.response.data) : error.message);
     res.sendStatus(200);
   }
