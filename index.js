@@ -6,36 +6,37 @@ import fs from "fs";
 const app = express();
 app.use(bodyParser.json());
 
+// 1. Setup variables
 const PORT = process.env.PORT || 3000;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 
-// 1. Environment Check
+// Key check
 if (!GEMINI_API_KEY || !SLACK_BOT_TOKEN) {
-  console.error("❌ ERROR: Missing GEMINI_API_KEY or SLACK_BOT_TOKEN.");
+  console.error("❌ ERROR: Missing GEMINI_API_KEY or SLACK_BOT_TOKEN in Railway.");
 }
 
-// 2. Load DESIGN.md
+// 2. Load Brand Guidelines
 let designSpecs = "Follow high-converting, modern minimalist design principles.";
 try {
   if (fs.existsSync("./DESIGN.md")) {
     designSpecs = fs.readFileSync("./DESIGN.md", "utf8");
-    console.log("🎨 DESIGN.md rules loaded.");
+    console.log("🎨 DESIGN.md rules applied.");
   }
 } catch (err) {
-  console.log("⚠️ No DESIGN.md found, using defaults.");
+  console.log("⚠️ No DESIGN.md found, using default strategy.");
 }
 
-// 3. Health check for Railway
+// 3. Web Health Check
 app.get("/", (req, res) => {
-  res.send("BraveNoise AI (Gemini Edition) is online 🚀");
+  res.send("BraveNoise AI (Gemini Edition) is officially online 🚀");
 });
 
-// 4. Slack Events Endpoint
+// 4. Slack Events Handler
 app.post("/slack/events", async (req, res) => {
   const body = req.body;
 
-  // Handle the Slack URL verification challenge
+  // URL Verification for initial setup
   if (body.type === "url_verification") {
     return res.send({ challenge: body.challenge });
   }
@@ -43,72 +44,26 @@ app.post("/slack/events", async (req, res) => {
   try {
     const event = body.event;
 
-    // Only respond to messages from users, not bots
+    // Process only user messages
     if (event && event.text && !event.bot_id && event.type === "message") {
       const userMessage = event.text;
       const channelId = event.channel;
+
+      console.log(`📩 Processing: "${userMessage}"`);
 
       // Call Gemini API
       const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
       
       const response = await axios.post(geminiUrl, {
         system_instruction: {
-          parts: [{ text: `You are BraveNoise AI. Priority: Revenue via Etsy/Printify. Brand Rules: ${designSpecs}. Always provide actionable SEO titles and niche ideas.` }]
+          parts: [{ text: `You are BraveNoise AI. Your mission: Maximize revenue via Etsy and Printify. Brand Rules: ${designSpecs}. Always provide SEO titles and actionable product niches.` }]
         },
-        contents: [
-          { parts: [{ text: userMessage }] }
-        ]
+        contents: [{ parts: [{ text: userMessage }] }]
       });
 
       const aiReply = response.data.candidates[0].content.parts[0].text;
 
-      // Send the reply back to Slack
-      await axios.post(
-        "https://slack.com/api/chat.postMessage",
-        {
-          channel: channelId,
-          text: aiReply
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
-            "Content-Type": "application/json; charset=utf-8"
-          }
-        }
-      );
-    }
-    res.sendStatus(200);
-  } catch (error) {
-    console.error("❌ Error:", error.response ? JSON.stringify(error.response.data) : error.message);
-    res.sendStatus(200);
-  }
-});
-
-// 5. Start Server
-app.listen(PORT, () => {
-  console.log(`🚀 BraveNoise AI listening on port ${PORT}`);
-});  try {
-    const event = body.event;
-    if (event && event.text && !event.bot_id && event.type === "message") {
-      const userMessage = event.text;
-      const channelId = event.channel;
-
-      // 🔥 3. Gemini API Call (REST format)
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-      
-      const response = await axios.post(geminiUrl, {
-        system_instruction: {
-          parts: [{ text: `You are BraveNoise AI. Priority: Revenue via Etsy/Printify. Brand Rules: ${designSpecs}. Always provide actionable SEO titles and niche ideas.` }]
-        },
-        contents: [
-          { parts: [{ text: userMessage }] }
-        ]
-      });
-
-      // Gemini's specific response structure
-      const aiReply = response.data.candidates[0].content.parts[0].text;
-
-      // 4. Reply to Slack
+      // Post back to Slack
       await axios.post(
         "https://slack.com/api/chat.postMessage",
         { channel: channelId, text: aiReply },
@@ -122,75 +77,12 @@ app.listen(PORT, () => {
     }
     res.sendStatus(200);
   } catch (error) {
-    console.error("❌ Gemini/Slack Error:", error.response ? JSON.stringify(error.response.data) : error.message);
+    console.error("❌ System Error:", error.response ? JSON.stringify(error.response.data) : error.message);
     res.sendStatus(200);
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 BraveNoise AI (Gemini) listening on port ${PORT}`);
-});
-  // URL Verification for Slack setup
-  if (body.type === "url_verification") {
-    return res.send({ challenge: body.challenge });
-  }
-
-  try {
-    const event = body.event;
-
-    // Check if it's a message from a real person
-    if (event && event.text && !event.bot_id && event.type === "message") {
-      const userMessage = event.text;
-      const channelId = event.channel;
-
-      // Call OpenAI
-      const response = await axios.post(
-        "https://api.openai.com/v1/chat/completions",
-        {
-          model: "gpt-4o-mini",
-          messages: [
-            {
-              role: "system",
-              content: `You are BraveNoise AI. Priority: Revenue from Etsy/Printify. 
-              Brand Guidelines: ${designSpecs}. 
-              Always give actionable SEO titles and product ideas.`
-            },
-            { role: "user", content: userMessage }
-          ]
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${OPENAI_API_KEY}`,
-            "Content-Type": "application/json"
-          }
-        }
-      );
-
-      const aiReply = response.data.choices[0].message.content;
-
-      // Send reply to Slack
-      await axios.post(
-        "https://slack.com/api/chat.postMessage",
-        {
-          channel: channelId,
-          text: aiReply
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
-            "Content-Type": "application/json; charset=utf-8"
-          }
-        }
-      );
-    }
-    res.sendStatus(200);
-  } catch (error) {
-    console.error("❌ Detailed Error:", error.response ? error.response.data : error.message);
-    res.sendStatus(200);
-  }
-});
-
-// 5. Start the engine
-app.listen(PORT, () => {
+// 5. Ignition
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 BraveNoise AI listening on port ${PORT}`);
 });
