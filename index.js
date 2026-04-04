@@ -1,41 +1,41 @@
 import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
-import fs from "fs"; // Added to potentially read DESIGN.md
+import fs from "fs";
 
 const app = express();
 app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 3000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN; // Switch to Bot Token for more flexibility
+const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 
-// ✅ 1. Environment Variable Safety Check
+// 1. Safety Check for Keys
 if (!OPENAI_API_KEY || !SLACK_BOT_TOKEN) {
-  console.error("❌ MISSING CONFIG: Ensure OPENAI_API_KEY and SLACK_BOT_TOKEN are set in Railway.");
+  console.error("❌ ERROR: Missing environment variables.");
 }
 
-// ✅ 2. Optional: Load Design Guidelines
-let designSpecs = "Follow general minimalist and modern design principles.";
+// 2. Load DESIGN.md if it exists
+let designSpecs = "Use clean, high-converting design principles.";
 try {
   if (fs.existsSync("./DESIGN.md")) {
     designSpecs = fs.readFileSync("./DESIGN.md", "utf8");
-    console.log("🎨 DESIGN.md loaded successfully.");
+    console.log("🎨 DESIGN.md rules applied.");
   }
 } catch (err) {
-  console.log("⚠️ No DESIGN.md found, using default specs.");
+  console.log("⚠️ No DESIGN.md found, using default vibe.");
 }
 
-// ✅ Health check
+// 3. Health check for Railway
 app.get("/", (req, res) => {
-  res.send("BraveNoise AI is running 🚀");
+  res.send("BraveNoise AI is officially online 🚀");
 });
 
-// ✅ Slack Events Endpoint
+// 4. Slack Events Endpoint
 app.post("/slack/events", async (req, res) => {
   const body = req.body;
 
-  // Slack URL verification (Crucial for first-time setup)
+  // URL Verification for Slack setup
   if (body.type === "url_verification") {
     return res.send({ challenge: body.challenge });
   }
@@ -43,14 +43,12 @@ app.post("/slack/events", async (req, res) => {
   try {
     const event = body.event;
 
-    // Only respond to messages from humans (ignore bot's own messages)
+    // Check if it's a message from a real person
     if (event && event.text && !event.bot_id && event.type === "message") {
       const userMessage = event.text;
       const channelId = event.channel;
 
-      console.log(`📩 Received message: "${userMessage}" from channel ${channelId}`);
-
-      // 🔥 3. Improved OpenAI API call with "Chain of Thought" instructions
+      // Call OpenAI
       const response = await axios.post(
         "https://api.openai.com/v1/chat/completions",
         {
@@ -58,21 +56,9 @@ app.post("/slack/events", async (req, res) => {
           messages: [
             {
               role: "system",
-              content: `
-You are BraveNoise AI, a revenue-focused strategist. 
-
-CORE OBJECTIVE: Help the user generate income via Etsy, Printify, and Digital Products.
-
-DESIGN RULES (from DESIGN.md):
-${designSpecs}
-
-WORKFLOW:
-1. ANALYZE: If a user asks for a product idea, first identify a trending niche.
-2. OPTIMIZE: Provide SEO-optimized titles and tags.
-3. VISUALIZE: Describe the visual look based on the DESIGN RULES above.
-4. ACTION: Give clear, numbered steps to launch.
-
-Always be concise, professional, and obsessed with conversion rates.`
+              content: `You are BraveNoise AI. Priority: Revenue from Etsy/Printify. 
+              Brand Guidelines: ${designSpecs}. 
+              Always give actionable SEO titles and product ideas.`
             },
             { role: "user", content: userMessage }
           ]
@@ -85,14 +71,14 @@ Always be concise, professional, and obsessed with conversion rates.`
         }
       );
 
-      const reply = response.data.choices[0].message.content;
+      const aiReply = response.data.choices[0].message.content;
 
-      // 🔥 4. Send back to Slack using Web API (More robust than Webhooks)
+      // Send reply to Slack
       await axios.post(
         "https://slack.com/api/chat.postMessage",
         {
           channel: channelId,
-          text: reply
+          text: aiReply
         },
         {
           headers: {
@@ -102,77 +88,14 @@ Always be concise, professional, and obsessed with conversion rates.`
         }
       );
     }
-
     res.sendStatus(200);
   } catch (error) {
-    // ✅ 5. Advanced Error Logging
-    console.error("❌ ERROR DETECTED:");
-    if (error.response) {
-      console.error("Status:", error.response.status);
-      console.error("Data:", JSON.stringify(error.response.data, null, 2));
-    } else {
-      console.error("Message:", error.message);
-    }
-    res.sendStatus(200); // Still send 200 to Slack to prevent infinite retries
-  }
-});
-
-// ✅ Start server
-app.listen(PORT, () => {
-  console.log(`🚀 BraveNoise Server running on port ${PORT}`);
-});          messages: [
-            {
-              role: "system",
-              content: `
-You are BraveNoise AI, a revenue-focused assistant.
-
-Your priorities:
-
-1. Generate income via Etsy + Printify:
-- Suggest product ideas
-- Write SEO titles, descriptions, and tags
-- Identify trending niches
-
-2. Create digital products:
-- Suggest ideas
-- Generate content
-- Suggest pricing and positioning
-
-3. Secondary: content creation for social media
-
-Always give actionable, structured outputs.
-              `
-            },
-            {
-              role: "user",
-              content: userMessage
-            }
-          ]
-        },
-        {
-          headers: {
-            Authorization: \`Bearer \${OPENAI_API_KEY}\`,
-            "Content-Type": "application/json"
-          }
-        }
-      );
-
-      const reply = response.data.choices[0].message.content;
-
-      // 🔥 Send back to Slack
-      await axios.post(process.env.SLACK_WEBHOOK_URL, {
-        text: reply
-      });
-    }
-
-    res.sendStatus(200);
-  } catch (error) {
-    console.error("Error:", error.message);
+    console.error("❌ Detailed Error:", error.response ? error.response.data : error.message);
     res.sendStatus(200);
   }
 });
 
-// ✅ Start server
+// 5. Start the engine
 app.listen(PORT, () => {
-  console.log(\`Server running on port \${PORT}\`);
+  console.log(`🚀 BraveNoise AI listening on port ${PORT}`);
 });
