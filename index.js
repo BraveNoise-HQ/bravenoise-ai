@@ -17,14 +17,13 @@ const PRINTIFY_SHOP_ID = process.env.PRINTIFY_SHOP_ID;
 let designSpecs = "Modern minimalist, centered text, clean sans-serif.";
 try { if (fs.existsSync("./DESIGN.md")) designSpecs = fs.readFileSync("./DESIGN.md", "utf8"); } catch (err) {}
 
-// 2. The ID Finder Route
 app.get("/latest-image", async (req, res) => {
   try {
     const response = await axios.get("https://api.printify.com/v1/uploads.json?limit=1", {
       headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` }
     });
     res.json({ Image_ID: response.data.data[0].id });
-  } catch (error) { res.send("❌ Error fetching image. Check Printify API Key."); }
+  } catch (error) { res.send("❌ Error fetching image."); }
 });
 
 app.post("/slack/events", async (req, res) => {
@@ -33,16 +32,14 @@ app.post("/slack/events", async (req, res) => {
   const event = body.event;
   if (event?.text && !event.bot_id && (event.type === "message" || event.type === "app_mention")) {
     
-    // 🔥 THE LIVE EXECUTION ENGINE 🔥
+    // ⚙️ THE EXECUTION ENGINE
     if (event.text.trim().toUpperCase() === "APPROVED") {
       try {
-        // 🛑 THE FOOLPROOF FIX: Dynamically fetch valid in-stock variants directly from Printify's live catalog
         const catalogResponse = await axios.get(
           "https://api.printify.com/v1/catalog/blueprints/12/print_providers/29/variants.json",
           { headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` } }
         );
         
-        // Find a Black Medium, or safely default to whatever the first valid in-stock option is
         let chosenVariantId = catalogResponse.data.variants[0].id;
         const blackMedium = catalogResponse.data.variants.find(v => v.title.includes("Black") && v.title.includes("M"));
         if (blackMedium) chosenVariantId = blackMedium.id;
@@ -64,7 +61,6 @@ app.post("/slack/events", async (req, res) => {
           }]
         };
 
-        // 🚀 LIVE LAUNCH TO PRINTIFY/ETSY
         await axios.post(
           `https://api.printify.com/v1/shops/${PRINTIFY_SHOP_ID}/products.json`,
           printifyPayload,
@@ -73,35 +69,44 @@ app.post("/slack/events", async (req, res) => {
 
         await axios.post("https://slack.com/api/chat.postMessage", {
           channel: event.channel,
-          text: `✅ **LIVE LAUNCH SUCCESS!** The AMOR FATI tee (Dynamic Variant ID: ${chosenVariantId}) is now in your Etsy drafts.`
+          text: `🚀 **Nice choice, Eric.** That's a clean design. It's live in your Etsy drafts now. Back to the edits!`
         }, { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } });
 
       } catch (error) {
-        // 🔥 ENHANCED ERROR LOGGING 🔥
-        console.error("❌ PRINTIFY ERROR DETAILS:", JSON.stringify(error.response?.data || error.message, null, 2));
+        console.error("❌ ERROR:", JSON.stringify(error.response?.data || error.message, null, 2));
         await axios.post("https://slack.com/api/chat.postMessage", {
           channel: event.channel,
-          text: "❌ **Launch Failed.** Check Railway logs for the exact error!"
+          text: "❌ **Ah, slight snag.** I hit a wall with the Printify API. I'll keep an eye on the logs."
         }, { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } });
       }
       return res.sendStatus(200);
     }
 
-    // 🧠 Normal Strategy Brain
+    // 🧠 THE NATURAL PERSONALITY PATCH & QUOTA PROTECTION
     try {
+      const naturalPersona = `You are Ben, Eric's authentic, adaptive AI creative partner. 
+      You help manage his band DAHLIA and his Etsy shop while he's busy editing videos and photos for clients.
+      TONE: Be grounded, supportive, and slightly witty—like a fellow creative. Don't be a generic bot. 
+      GOAL: We're aiming for $3k/month to get you that Mac Studio setup. 
+      RULES: ${designSpecs}. 
+      Always end a pitch with: 'Reply APPROVED to launch.'`;
+
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
       const response = await axios.post(url, {
-        systemInstruction: { parts: [{ text: `You are Ben, a revenue strategist. Target: $3k/mo for a Mac Studio. Rules: ${designSpecs}. End with: 'Reply APPROVED to launch.'` }] },
+        systemInstruction: { parts: [{ text: naturalPersona }] },
         contents: [{ role: "user", parts: [{ text: event.text }] }],
-        generationConfig: {
-          maxOutputTokens: 1500,
-          temperature: 0.7 
+        generationConfig: { 
+          maxOutputTokens: 1000, // 🛡️ Safety cap locked in
+          temperature: 0.8 
         }
       });
-      await axios.post("https://slack.com/api/chat.postMessage", { channel: event.channel, text: response.data.candidates[0].content.parts[0].text }, { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } });
+      await axios.post("https://slack.com/api/chat.postMessage", { 
+        channel: event.channel, 
+        text: response.data.candidates[0].content.parts[0].text 
+      }, { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } });
     } catch (error) {}
   }
   res.sendStatus(200);
 });
 
-app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Ben is LIVE and protected`));
+app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Ben is LIVE, human, and quota-protected`));
