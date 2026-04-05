@@ -36,18 +36,22 @@ app.post("/slack/events", async (req, res) => {
     // 🔥 THE LIVE EXECUTION ENGINE 🔥
     if (event.text.trim().toUpperCase() === "APPROVED") {
       try {
+        // 🎨 The "Fallback Roulette" - Valid IDs for Black, Dark Grey, Navy, Asphalt (Size M)
+        const safeVariants = [43058, 43075, 43059, 43072];
+        const chosenVariantId = safeVariants[Math.floor(Math.random() * safeVariants.length)];
+
         const printifyPayload = {
           title: "AMOR FATI - Minimalist Essential Tee",
           description: "Love of Fate. A high-quality minimalist design.",
           tags: ["minimalist", "dahlia", "streetwear", "philosophy"],
-          blueprint_id: 12, // Bella+Canvas 3001
+          blueprint_id: 12, 
           print_provider_id: 29, 
-          variants: [{ id: 43058, price: 2800, is_enabled: true }], // Black / Medium
+          variants: [{ id: chosenVariantId, price: 2800, is_enabled: true }], 
           print_areas: [{
-            variant_ids: [43058],
+            variant_ids: [chosenVariantId],
             placeholders: [{
               position: "front",
-              // 👇 PASTE YOUR ALPHANUMERIC ID INSIDE THESE EXACT QUOTES 👇
+              // 👇 PUT YOUR EXACT IMAGE ID BACK IN HERE 👇
               images: [{ id: "69d1da8bc40ef87fe98b317e", x: 0.5, y: 0.5, scale: 0.2 }] 
             }]
           }]
@@ -62,14 +66,15 @@ app.post("/slack/events", async (req, res) => {
 
         await axios.post("https://slack.com/api/chat.postMessage", {
           channel: event.channel,
-          text: "✅ **LIVE LAUNCH SUCCESS!** The AMOR FATI tee has been sent to your Etsy drafts. Go get 'em, Eric!"
+          text: `✅ **LIVE LAUNCH SUCCESS!** The AMOR FATI tee (Variant ID: ${chosenVariantId}) is now in your Etsy drafts.`
         }, { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } });
 
       } catch (error) {
-        console.error(error);
+        // 🔥 ENHANCED ERROR LOGGING 🔥
+        console.error("❌ PRINTIFY ERROR DETAILS:", JSON.stringify(error.response?.data, null, 2));
         await axios.post("https://slack.com/api/chat.postMessage", {
           channel: event.channel,
-          text: "❌ **Launch Failed.** Check your Railway logs for the error detail."
+          text: "❌ **Launch Failed.** Printify rejected the data. Check Railway logs for the exact error!"
         }, { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } });
       }
       return res.sendStatus(200);
@@ -82,7 +87,7 @@ app.post("/slack/events", async (req, res) => {
         systemInstruction: { parts: [{ text: `You are Ben, a revenue strategist. Target: $3k/mo for a Mac Studio. Rules: ${designSpecs}. End with: 'Reply APPROVED to launch.'` }] },
         contents: [{ role: "user", parts: [{ text: event.text }] }],
         generationConfig: {
-          maxOutputTokens: 1500, // Safety cap restored
+          maxOutputTokens: 1500,
           temperature: 0.7 
         }
       });
