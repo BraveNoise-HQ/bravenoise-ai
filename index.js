@@ -120,3 +120,21 @@ app.post("/slack/events", async (req, res) => {
           temperature: 0.7 
         }
       });
+
+      const aiReply = response.data.candidates[0].content.parts[0].text;
+
+      await axios.post("https://slack.com/api/chat.postMessage", 
+        { channel: event.channel, text: aiReply },
+        { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } }
+      );
+
+    } catch (error) {
+      console.error("❌ Gemini API Error:", error.message);
+    }
+  }
+  res.sendStatus(200);
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 BraveNoise AI Agent listening on port ${PORT}`);
+});
