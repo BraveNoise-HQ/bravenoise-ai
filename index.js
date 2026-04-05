@@ -1,7 +1,7 @@
 import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
-import fs from "fs"; // 👈 Restored for your Brand Rules
+import fs from "fs"; 
 
 const app = express();
 app.use(bodyParser.json());
@@ -24,6 +24,23 @@ try {
 } catch (err) {
   console.log("⚠️ No DESIGN.md found, using default revenue strategy.");
 }
+
+// ⚡️ 2. TEMPORARY ROUTE TO EXTRACT THE LATEST IMAGE ID ⚡️
+app.get("/latest-image", async (req, res) => {
+  try {
+    const response = await axios.get("https://api.printify.com/v1/uploads.json?limit=1", {
+      headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` }
+    });
+    const latestImage = response.data.data[0];
+    res.json({ 
+      Success: "Here is your Image ID!",
+      FileName: latestImage.file_name, 
+      Image_ID: latestImage.id 
+    });
+  } catch (error) {
+    res.send("❌ Error fetching images. Check API key.");
+  }
+});
 
 app.get("/", (req, res) => {
   res.send("BraveNoise AI (Agent Mode) is online and hunting for margins! 🚀");
@@ -59,6 +76,7 @@ app.post("/slack/events", async (req, res) => {
             variant_ids: [43058],
             placeholders: [{
               position: "front",
+              // 🔥 DROP YOUR IMAGE ID HERE ONCE YOU HAVE IT 🔥
               images: [{ id: "PLACEHOLDER_IMAGE_ID", x: 0.5, y: 0.5, scale: 1 }] 
             }]
           }]
@@ -75,7 +93,7 @@ app.post("/slack/events", async (req, res) => {
 
         await axios.post("https://slack.com/api/chat.postMessage", {
           channel: event.channel,
-          text: "✅ *Payload Constructed.* \n\n*Next Step for Eric:* Upload your graphic to Printify's media library, grab the `image_id`, and drop it into my code to complete the automation loop."
+          text: "✅ *Payload Constructed.* \n\n*Next Step for Eric:* Upload your graphic to Printify's media library, go to your Railway URL + `/latest-image` to grab the ID, and drop it into my code."
         }, { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } });
 
       } catch (error) {
@@ -97,27 +115,8 @@ app.post("/slack/events", async (req, res) => {
       const response = await axios.post(url, {
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: [{ role: "user", parts: [{ text: event.text }] }],
-        // 🛡️ Restored the safety cap and creativity dial!
         generationConfig: {
           maxOutputTokens: 1500,
           temperature: 0.7 
         }
       });
-
-      const aiReply = response.data.candidates[0].content.parts[0].text;
-
-      await axios.post("https://slack.com/api/chat.postMessage", 
-        { channel: event.channel, text: aiReply },
-        { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } }
-      );
-
-    } catch (error) {
-      console.error("❌ Gemini API Error:", error.message);
-    }
-  }
-  res.sendStatus(200);
-});
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 BraveNoise AI Agent listening on port ${PORT}`);
-});
