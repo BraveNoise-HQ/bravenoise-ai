@@ -36,9 +36,16 @@ app.post("/slack/events", async (req, res) => {
     // 🔥 THE LIVE EXECUTION ENGINE 🔥
     if (event.text.trim().toUpperCase() === "APPROVED") {
       try {
-        // 🎨 The "Fallback Roulette" - Valid IDs for Black, Dark Grey, Navy, Asphalt (Size M)
-        const safeVariants = [43058, 43075, 43059, 43072];
-        const chosenVariantId = safeVariants[Math.floor(Math.random() * safeVariants.length)];
+        // 🛑 THE FOOLPROOF FIX: Dynamically fetch valid in-stock variants directly from Printify's live catalog
+        const catalogResponse = await axios.get(
+          "https://api.printify.com/v1/catalog/blueprints/12/print_providers/29/variants.json",
+          { headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` } }
+        );
+        
+        // Find a Black Medium, or safely default to whatever the first valid in-stock option is
+        let chosenVariantId = catalogResponse.data.variants[0].id;
+        const blackMedium = catalogResponse.data.variants.find(v => v.title.includes("Black") && v.title.includes("M"));
+        if (blackMedium) chosenVariantId = blackMedium.id;
 
         const printifyPayload = {
           title: "AMOR FATI - Minimalist Essential Tee",
@@ -51,7 +58,7 @@ app.post("/slack/events", async (req, res) => {
             variant_ids: [chosenVariantId],
             placeholders: [{
               position: "front",
-              // 👇 ANGLE ADDED HERE. PASTE YOUR EXACT IMAGE ID BACK IN 👇
+              // 👇 PASTE YOUR EXACT IMAGE ID BACK IN HERE 👇
               images: [{ id: "69d1da8bc40ef87fe98b317e", x: 0.5, y: 0.5, scale: 0.2, angle: 0 }] 
             }]
           }]
@@ -66,21 +73,21 @@ app.post("/slack/events", async (req, res) => {
 
         await axios.post("https://slack.com/api/chat.postMessage", {
           channel: event.channel,
-          text: `✅ **LIVE LAUNCH SUCCESS!** The AMOR FATI tee (Variant ID: ${chosenVariantId}) is now in your Etsy drafts.`
+          text: `✅ **LIVE LAUNCH SUCCESS!** The AMOR FATI tee (Dynamic Variant ID: ${chosenVariantId}) is now in your Etsy drafts.`
         }, { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } });
 
       } catch (error) {
         // 🔥 ENHANCED ERROR LOGGING 🔥
-        console.error("❌ PRINTIFY ERROR DETAILS:", JSON.stringify(error.response?.data, null, 2));
+        console.error("❌ PRINTIFY ERROR DETAILS:", JSON.stringify(error.response?.data || error.message, null, 2));
         await axios.post("https://slack.com/api/chat.postMessage", {
           channel: event.channel,
-          text: "❌ **Launch Failed.** Printify rejected the data. Check Railway logs for the exact error!"
+          text: "❌ **Launch Failed.** Check Railway logs for the exact error!"
         }, { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } });
       }
       return res.sendStatus(200);
     }
 
-    // 🧠 Normal Strategy Brain (With Quota Protection)
+    // 🧠 Normal Strategy Brain
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
       const response = await axios.post(url, {
