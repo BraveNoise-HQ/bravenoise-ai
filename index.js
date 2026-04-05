@@ -27,8 +27,17 @@ app.get("/latest-image", async (req, res) => {
 });
 
 app.post("/slack/events", async (req, res) => {
+  // 🛑 THE ECHO FIX: Ignore automatic retries from Slack
+  if (req.headers['x-slack-retry-num']) {
+    return res.status(200).send("OK");
+  }
+
   const { body } = req;
   if (body.type === "url_verification") return res.send({ challenge: body.challenge });
+
+  // 🛑 Send an immediate receipt to Slack so it doesn't trigger the 3-second timeout
+  res.status(200).send("OK");
+
   const event = body.event;
   if (event?.text && !event.bot_id && (event.type === "message" || event.type === "app_mention")) {
     
@@ -79,7 +88,7 @@ app.post("/slack/events", async (req, res) => {
           text: "❌ **Ah, slight snag.** I hit a wall with the Printify API. I'll keep an eye on the logs."
         }, { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } });
       }
-      return res.sendStatus(200);
+      return; 
     }
 
     // 🧠 THE NATURAL PERSONALITY PATCH & QUOTA PROTECTION
@@ -96,7 +105,7 @@ app.post("/slack/events", async (req, res) => {
         systemInstruction: { parts: [{ text: naturalPersona }] },
         contents: [{ role: "user", parts: [{ text: event.text }] }],
         generationConfig: { 
-          maxOutputTokens: 1000, // 🛡️ Safety cap locked in
+          maxOutputTokens: 1000,
           temperature: 0.8 
         }
       });
@@ -106,7 +115,6 @@ app.post("/slack/events", async (req, res) => {
       }, { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } });
     } catch (error) {}
   }
-  res.sendStatus(200);
 });
 
 app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Ben is LIVE, human, and quota-protected`));
