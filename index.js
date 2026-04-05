@@ -51,8 +51,8 @@ app.post("/slack/events", async (req, res) => {
             variant_ids: [chosenVariantId],
             placeholders: [{
               position: "front",
-              // 👇 PUT YOUR EXACT IMAGE ID BACK IN HERE 👇
-              images: [{ id: "69d1da8bc40ef87fe98b317e", x: 0.5, y: 0.5, scale: 0.2 }] 
+              // 👇 ANGLE ADDED HERE. PASTE YOUR EXACT IMAGE ID BACK IN 👇
+              images: [{ id: "69d1da8bc40ef87fe98b317e", x: 0.5, y: 0.5, scale: 0.2, angle: 0 }] 
             }]
           }]
         };
