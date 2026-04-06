@@ -9,7 +9,7 @@ app.use(bodyParser.json());
 const PORT = process.env.PORT || 8080;
 
 // ENV (MATCHES YOUR VARIABLE NAME)
-const OPENAI_API_KEY = process.env.OPEN_AI_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const PRINTIFY_TOKEN = process.env.PRINTIFY_API_TOKEN;
 const PRINTIFY_SHOP_ID = process.env.PRINTIFY_SHOP_ID;
