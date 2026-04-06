@@ -9,14 +9,12 @@ app.use(bodyParser.json());
 const PORT = process.env.PORT || 8080;
 
 // ENV
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const PRINTIFY_TOKEN = process.env.PRINTIFY_API_TOKEN;
 const PRINTIFY_SHOP_ID = process.env.PRINTIFY_SHOP_ID;
 
-const MODEL_NAME = "gemini-3-flash-preview";
-
-// 🧠 MEMORY (limited)
+// 🧠 MEMORY
 let conversationHistory = [];
 
 // 🔒 TOKEN CONTROL
@@ -29,7 +27,7 @@ try {
   if (fs.existsSync("./DESIGN.md")) {
     designSpecs = fs.readFileSync("./DESIGN.md", "utf8");
   }
-} catch (err) {}
+} catch {}
 
 // 🔍 TREND KEYWORDS
 const TREND_KEYWORDS = [
@@ -45,172 +43,178 @@ const TREND_KEYWORDS = [
   "no excuses"
 ];
 
-// 🤖 GEMINI CALL (WITH TOKEN LIMIT)
-async function askGemini(prompt) {
+// 🤖 OPENAI CALL
+async function askOpenAI(prompt) {
   try {
     const estimatedTokens = prompt.length / 4;
 
     if (dailyTokenUsage + estimatedTokens > DAILY_TOKEN_LIMIT) {
-      return "⚠️ Daily token limit reached. Try again tomorrow.";
+      return null;
     }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
-
-    const response = await axios.post(url, {
-      contents: [
-        ...conversationHistory,
-        { role: "user", parts: [{ text: prompt }] }
-      ],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 300 // 🔥 reduced
+    const response = await axios.post(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        model: "gpt-4o-mini",
+        messages: [
+          ...conversationHistory,
+          { role: "user", content: prompt }
+        ],
+        max_tokens: 250,
+        temperature: 0.6
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        }
       }
-    });
+    );
 
-    const reply =
-      response.data.candidates?.[0]?.content?.parts?.[0]?.text ||
-      "No response.";
+    const reply = response.data.choices?.[0]?.message?.content || "";
 
-    // track tokens
     dailyTokenUsage += estimatedTokens;
 
-    // memory update
-    conversationHistory.push({ role: "user", parts: [{ text: prompt }] });
-    conversationHistory.push({ role: "model", parts: [{ text: reply }] });
+    conversationHistory.push({ role: "user", content: prompt });
+    conversationHistory.push({ role: "assistant", content: reply });
 
-    // keep memory small
     conversationHistory = conversationHistory.slice(-4);
 
     return reply;
 
   } catch (err) {
-    console.error("Gemini Error:", err.response?.data || err.message);
-    return "⚠️ Gemini error.";
-  }
-}
-
-// 🎯 GENERATE PRODUCT
-async function generateProduct() {
-  const keyword = TREND_KEYWORDS[Math.floor(Math.random() * TREND_KEYWORDS.length)];
-
-  const prompt = `
-You are an Etsy product expert.
-
-Trending keyword: "${keyword}"
-
-Create:
-1. Product Title
-2. Short Description
-3. 10 Etsy Tags
-
-Style: ${designSpecs}
-
-Keep it minimal and highly sellable.
-`;
-
-  return await askGemini(prompt);
-}
-
-// 🖼 GET IMAGE
-async function getLatestImage() {
-  try {
-    const res = await axios.get("https://api.printify.com/v1/uploads.json?limit=1", {
-      headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` }
-    });
-
-    return res.data.data?.[0]?.id;
-
-  } catch (err) {
-    console.error("Image Error:", err.response?.data || err.message);
+    console.error("OpenAI Error:", err.response?.data || err.message);
     return null;
   }
 }
 
+// 🧠 EXTRACT JSON SAFELY
+function extractJSON(text) {
+  try {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    return JSON.parse(match[0]);
+  } catch {
+    return null;
+  }
+}
+
+// 🎯 GENERATE PRODUCT
+async function generateProductData() {
+  const keyword = TREND_KEYWORDS[Math.floor(Math.random() * TREND_KEYWORDS.length)];
+
+  const prompt = `
+Return ONLY valid JSON:
+
+{
+  "title": "...",
+  "description": "...",
+  "tags": ["tag1","tag2","tag3","tag4","tag5","tag6","tag7","tag8","tag9","tag10"]
+}
+
+Rules:
+- SEO optimized title
+- Clean description
+- No AI/meta text
+
+Keyword: ${keyword}
+Style: ${designSpecs}
+`;
+
+  const raw = await askOpenAI(prompt);
+  const parsed = extractJSON(raw);
+
+  if (!parsed || !parsed.title) {
+    throw new Error("Invalid AI output");
+  }
+
+  return parsed;
+}
+
+// 🖼 IMAGE
+async function getLatestImage() {
+  const res = await axios.get("https://api.printify.com/v1/uploads.json?limit=1", {
+    headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` }
+  });
+
+  return res.data.data?.[0]?.id;
+}
+
 // 🛒 CREATE PRODUCT
 async function createProduct() {
-  try {
-    const idea = await generateProduct();
-    const imageId = await getLatestImage();
+  const product = await generateProductData();
+  const imageId = await getLatestImage();
 
-    if (!imageId) throw new Error("No image found");
+  if (!imageId) throw new Error("No image found");
 
-    const catalog = await axios.get(
-      "https://api.printify.com/v1/catalog/blueprints/12/print_providers/29/variants.json",
-      { headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` } }
-    );
+  const catalog = await axios.get(
+    "https://api.printify.com/v1/catalog/blueprints/12/print_providers/29/variants.json",
+    { headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` } }
+  );
 
-    const variantId = catalog.data.variants?.[0]?.id;
+  const variantId = catalog.data.variants?.[0]?.id;
 
-    const payload = {
-      title: `Drop ${Date.now()}`,
-      description: idea,
-      tags: ["minimalist", "streetwear", "trending"],
-      blueprint_id: 12,
-      print_provider_id: 29,
-      variants: [{ id: variantId, price: 2900, is_enabled: true }],
-      print_areas: [{
-        variant_ids: [variantId],
-        placeholders: [{
-          position: "front",
-          images: [{
-            id: imageId,
-            x: 0.5,
-            y: 0.5,
-            scale: 0.2,
-            angle: 0
-          }]
+  const payload = {
+    title: product.title,
+    description: product.description,
+    tags: product.tags,
+    blueprint_id: 12,
+    print_provider_id: 29,
+    variants: [{ id: variantId, price: 2900, is_enabled: true }],
+    print_areas: [{
+      variant_ids: [variantId],
+      placeholders: [{
+        position: "front",
+        images: [{
+          id: imageId,
+          x: 0.5,
+          y: 0.5,
+          scale: 0.2,
+          angle: 0
         }]
       }]
-    };
+    }]
+  };
 
-    await axios.post(
-      `https://api.printify.com/v1/shops/${PRINTIFY_SHOP_ID}/products.json`,
-      payload,
-      { headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` } }
-    );
+  await axios.post(
+    `https://api.printify.com/v1/shops/${PRINTIFY_SHOP_ID}/products.json`,
+    payload,
+    { headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` } }
+  );
 
-    return idea;
-
-  } catch (err) {
-    console.error("Create Product Error:", err.response?.data || err.message);
-    throw err;
-  }
+  return product.title;
 }
 
-// 📢 SLACK SEND
+// 📢 SLACK
 async function sendSlackMessage(text, channel) {
-  try {
-    await axios.post("https://slack.com/api/chat.postMessage", {
-      channel,
-      text
-    }, {
-      headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` }
-    });
-  } catch (err) {
-    console.error("Slack Error:", err.response?.data || err.message);
-  }
+  await axios.post("https://slack.com/api/chat.postMessage", {
+    channel,
+    text
+  }, {
+    headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` }
+  });
 }
 
-// 🔁 AUTO LOOP (24 HOURS)
+// 🔁 AUTO LOOP
 setInterval(async () => {
-  console.log("🤖 Ben auto loop running...");
+  console.log("🤖 Auto posting...");
 
   try {
-    const idea = await createProduct();
-    await sendSlackMessage(`🚀 Auto Product Posted:\n${idea}`, "#general");
+    const title = await createProduct();
+    await sendSlackMessage(`🚀 New product created:\n${title}`, "#general");
   } catch (err) {
-    console.error("Auto Loop Error:", err.message);
+    console.error("Auto Error:", err.message);
   }
 
 }, 1000 * 60 * 60 * 24);
 
-// 🔄 RESET TOKEN DAILY
+// 🔄 RESET TOKENS
 setInterval(() => {
-  console.log("🔄 Resetting daily token usage");
   dailyTokenUsage = 0;
+  console.log("🔄 Tokens reset");
 }, 1000 * 60 * 60 * 24);
 
-// 💬 SLACK EVENTS
+// 💬 SLACK
 app.post("/slack/events", async (req, res) => {
   if (req.headers['x-slack-retry-num']) return res.status(200).send("OK");
 
@@ -228,49 +232,39 @@ app.post("/slack/events", async (req, res) => {
     const text = event.text.toLowerCase();
 
     try {
-      // 🔥 MANUAL POST
       if (text.includes("post now")) {
-        const idea = await createProduct();
-
-        await sendSlackMessage(
-          `🚀 Manual Product Posted:\n${idea}`,
-          event.channel
-        );
+        const title = await createProduct();
+        await sendSlackMessage(`🚀 Manual product created:\n${title}`, event.channel);
         return;
       }
 
-      // 💰 ONLY RESPOND TO BUSINESS-RELATED PROMPTS
-      if (!text.includes("idea") && !text.includes("product") && !text.includes("etsy")) {
+      if (!text.includes("product") && !text.includes("etsy") && !text.includes("idea")) {
         return;
       }
 
-      // 🧠 SMART CHAT
-      const reply = await askGemini(`
-You are Ben, Eric’s AI business partner.
-
-Focus on:
-- Etsy growth
-- Product ideas
-- Income generation
+      const reply = await askOpenAI(`
+You are Ben, an AI business operator focused on Etsy growth.
 
 Be concise.
 
 User: ${event.text}
 `);
 
-      await sendSlackMessage(reply, event.channel);
+      if (reply) {
+        await sendSlackMessage(reply, event.channel);
+      }
 
     } catch (err) {
-      console.error("Slack Handler Error:", err.message);
+      console.error("Slack Error:", err.message);
     }
   }
 });
 
 // HEALTH
 app.get("/", (req, res) => {
-  res.send("Ben is alive 🚀");
+  res.send("Ben OpenAI version running 🚀");
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("🚀 Ben running (token-safe mode)");
+  console.log("🚀 Ben OpenAI LIVE");
 });
