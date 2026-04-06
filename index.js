@@ -307,7 +307,7 @@ app.listen(PORT, "0.0.0.0", () => {
   "clean typography motivation",
   "modern minimal confidence quote",
   "success driven lifestyle"
-];
+;
 
 // 🤖 GROQ API CALL
 async function askGroq(prompt) {
