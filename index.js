@@ -10,6 +10,7 @@ const PORT = process.env.PORT || 8080;
 
 // 🔐 ENV VARIABLES
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-13b"; // change if your org has another model
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const PRINTIFY_TOKEN = process.env.PRINTIFY_API_TOKEN;
 const PRINTIFY_SHOP_ID = process.env.PRINTIFY_SHOP_ID;
@@ -29,7 +30,7 @@ try {
   }
 } catch {}
 
-// 🤖 GROQ API
+// 🤖 GROQ API CALL
 async function askGroq(prompt, maxTokens = 500) {
   try {
     const estimatedTokens = prompt.length / 4;
@@ -42,7 +43,7 @@ async function askGroq(prompt, maxTokens = 500) {
     const response = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
       {
-        model: "llama-3.3-13b",
+        model: GROQ_MODEL,
         messages: [
           ...conversationHistory,
           { role: "user", content: prompt }
@@ -90,7 +91,6 @@ async function performMarketResearch() {
 Find ONE profitable, low-competition t-shirt niche right now.
 Return ONE short phrase only.
 `;
-
   const result = await askGroq(prompt, 100);
   return result?.trim() || "minimalist stoic quotes";
 }
@@ -173,12 +173,12 @@ async function createProduct(channel) {
 app.post("/slack/events", async (req, res) => {
   const body = req.body;
 
-  // Slack verification
+  // Slack URL verification
   if (body.type === "url_verification") {
     return res.send(body.challenge);
   }
 
-  // Message handling
+  // Handle messages
   if (body.event && body.event.type === "message" && !body.event.bot_id) {
     const text = body.event.text;
     const channel = body.event.channel;
