@@ -2,14 +2,13 @@ import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
 import fs from "fs";
-import cron from "node-cron";
 
 const app = express();
 app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 8080;
 
-// API KEYS
+// ENV
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const PRINTIFY_TOKEN = process.env.PRINTIFY_API_TOKEN;
@@ -28,7 +27,7 @@ try {
   }
 } catch (err) {}
 
-// 🔍 FAKE TREND DATA (upgrade later with scraping)
+// 🔍 TREND KEYWORDS (temporary)
 const TREND_KEYWORDS = [
   "stoic quotes",
   "self discipline",
@@ -44,130 +43,149 @@ const TREND_KEYWORDS = [
 
 // 🤖 GEMINI CALL
 async function askGemini(prompt) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
 
-  const response = await axios.post(url, {
-    contents: [
-      ...conversationHistory,
-      { role: "user", parts: [{ text: prompt }] }
-    ],
-    generationConfig: {
-      temperature: 0.8,
-      maxOutputTokens: 800
-    }
-  });
+    const response = await axios.post(url, {
+      contents: [
+        ...conversationHistory,
+        { role: "user", parts: [{ text: prompt }] }
+      ],
+      generationConfig: {
+        temperature: 0.8,
+        maxOutputTokens: 800
+      }
+    });
 
-  const reply = response.data.candidates[0].content.parts[0].text;
+    const reply = response.data.candidates?.[0]?.content?.parts?.[0]?.text || "No response.";
 
-  conversationHistory.push({ role: "user", parts: [{ text: prompt }] });
-  conversationHistory.push({ role: "model", parts: [{ text: reply }] });
+    conversationHistory.push({ role: "user", parts: [{ text: prompt }] });
+    conversationHistory.push({ role: "model", parts: [{ text: reply }] });
 
-  // keep memory short
-  conversationHistory = conversationHistory.slice(-10);
+    conversationHistory = conversationHistory.slice(-10);
 
-  return reply;
+    return reply;
+
+  } catch (err) {
+    console.error("Gemini Error:", err.response?.data || err.message);
+    return "⚠️ Gemini error.";
+  }
 }
 
-// 🎯 GENERATE PRODUCT IDEA
+// 🎯 GENERATE PRODUCT
 async function generateProduct() {
   const keyword = TREND_KEYWORDS[Math.floor(Math.random() * TREND_KEYWORDS.length)];
 
   const prompt = `
-  You are an Etsy product expert.
+You are an Etsy product expert.
 
-  Based on this trending keyword: "${keyword}"
+Trending keyword: "${keyword}"
 
-  Create:
-  1. Product Title (SEO optimized)
-  2. Description (short but compelling)
-  3. 10 Etsy tags
+Create:
+1. Product Title
+2. Short Description
+3. 10 Etsy Tags
 
-  Style: ${designSpecs}
+Style: ${designSpecs}
 
-  Keep it clean, minimal, and marketable.
-  `;
+Keep it minimal and highly sellable.
+`;
 
   return await askGemini(prompt);
 }
 
-// 🖼 GET LATEST IMAGE
+// 🖼 GET IMAGE
 async function getLatestImage() {
-  const res = await axios.get("https://api.printify.com/v1/uploads.json?limit=1", {
-    headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` }
-  });
+  try {
+    const res = await axios.get("https://api.printify.com/v1/uploads.json?limit=1", {
+      headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` }
+    });
 
-  return res.data.data[0].id;
+    return res.data.data?.[0]?.id;
+
+  } catch (err) {
+    console.error("Image Error:", err.response?.data || err.message);
+    return null;
+  }
 }
 
 // 🛒 CREATE PRODUCT
 async function createProduct() {
-  const idea = await generateProduct();
-  const imageId = await getLatestImage();
+  try {
+    const idea = await generateProduct();
+    const imageId = await getLatestImage();
 
-  const catalog = await axios.get(
-    "https://api.printify.com/v1/catalog/blueprints/12/print_providers/29/variants.json",
-    { headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` } }
-  );
+    if (!imageId) throw new Error("No image found");
 
-  const variantId = catalog.data.variants[0].id;
+    const catalog = await axios.get(
+      "https://api.printify.com/v1/catalog/blueprints/12/print_providers/29/variants.json",
+      { headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` } }
+    );
 
-  const payload = {
-    title: `Drop ${Date.now()}`,
-    description: idea,
-    tags: ["minimalist", "trending", "streetwear"],
-    blueprint_id: 12,
-    print_provider_id: 29,
-    variants: [{ id: variantId, price: 2900, is_enabled: true }],
-    print_areas: [{
-      variant_ids: [variantId],
-      placeholders: [{
-        position: "front",
-        images: [{
-          id: imageId,
-          x: 0.5,
-          y: 0.5,
-          scale: 0.2,
-          angle: 0
+    const variantId = catalog.data.variants?.[0]?.id;
+
+    const payload = {
+      title: `Drop ${Date.now()}`,
+      description: idea,
+      tags: ["minimalist", "streetwear", "trending"],
+      blueprint_id: 12,
+      print_provider_id: 29,
+      variants: [{ id: variantId, price: 2900, is_enabled: true }],
+      print_areas: [{
+        variant_ids: [variantId],
+        placeholders: [{
+          position: "front",
+          images: [{
+            id: imageId,
+            x: 0.5,
+            y: 0.5,
+            scale: 0.2,
+            angle: 0
+          }]
         }]
       }]
-    }]
-  };
+    };
 
-  await axios.post(
-    `https://api.printify.com/v1/shops/${PRINTIFY_SHOP_ID}/products.json`,
-    payload,
-    { headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` } }
-  );
+    await axios.post(
+      `https://api.printify.com/v1/shops/${PRINTIFY_SHOP_ID}/products.json`,
+      payload,
+      { headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` } }
+    );
 
-  return idea;
+    return idea;
+
+  } catch (err) {
+    console.error("Create Product Error:", err.response?.data || err.message);
+    throw err;
+  }
 }
 
-// 📢 SEND TO SLACK
+// 📢 SLACK SEND
 async function sendSlackMessage(text, channel) {
-  await axios.post("https://slack.com/api/chat.postMessage", {
-    channel,
-    text
-  }, {
-    headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` }
-  });
+  try {
+    await axios.post("https://slack.com/api/chat.postMessage", {
+      channel,
+      text
+    }, {
+      headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` }
+    });
+  } catch (err) {
+    console.error("Slack Error:", err.response?.data || err.message);
+  }
 }
 
-// ⏱ DAILY AUTONOMOUS DROP
-cron.schedule("0 10 * * *", async () => {
-  console.log("🤖 Ben running daily task...");
+// 🔁 AUTO LOOP (24 HOURS)
+setInterval(async () => {
+  console.log("🤖 Ben auto loop running...");
 
   try {
     const idea = await createProduct();
-
-    await sendSlackMessage(
-      `🚀 Daily Product Live:\n${idea}`,
-      "#general"
-    );
-
+    await sendSlackMessage(`🚀 Auto Product Posted:\n${idea}`, "#general");
   } catch (err) {
-    console.error("AUTO ERROR:", err.message);
+    console.error("Auto Loop Error:", err.message);
   }
-});
+
+}, 1000 * 60 * 60 * 24); // 24h
 
 // 💬 SLACK EVENTS
 app.post("/slack/events", async (req, res) => {
@@ -187,44 +205,38 @@ app.post("/slack/events", async (req, res) => {
     const text = event.text.toLowerCase();
 
     try {
-      // 🔥 MANUAL TRIGGER
+      // 🔥 MANUAL POST
       if (text.includes("post now")) {
         const idea = await createProduct();
 
         await sendSlackMessage(
-          `🚀 Manual Drop Done:\n${idea}`,
+          `🚀 Manual Product Posted:\n${idea}`,
           event.channel
         );
         return;
       }
 
       // 🧠 NORMAL CHAT
-      const persona = `
-      You are Ben, Eric’s AI operator.
+      const reply = await askGemini(`
+You are Ben, Eric’s AI business partner.
+Be smart, helpful, and concise.
 
-      You help him:
-      - Grow Etsy income
-      - Create products
-      - Think like a business partner
-
-      Tone: smart, grounded, slightly witty.
-      `;
-
-      const reply = await askGemini(persona + "\nUser: " + event.text);
+User: ${event.text}
+`);
 
       await sendSlackMessage(reply, event.channel);
 
     } catch (err) {
-      console.error(err.message);
+      console.error("Slack Handler Error:", err.message);
     }
   }
 });
 
-// HEALTH CHECK
+// HEALTH
 app.get("/", (req, res) => {
-  res.send("Ben Level 2 is running 🚀");
+  res.send("Ben is alive 🚀");
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("🚀 Ben Level 2 LIVE");
+  console.log("🚀 Ben running (no-cron stable)");
 });
