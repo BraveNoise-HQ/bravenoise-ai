@@ -8,7 +8,7 @@ app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 8080;
 
-// 🔐 ENV
+// 🔐 ENV VARIABLES
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const FAL_KEY = process.env.FAL_KEY;
@@ -16,12 +16,16 @@ const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const PRINTIFY_TOKEN = process.env.PRINTIFY_API_TOKEN;
 const PRINTIFY_SHOP_ID = process.env.PRINTIFY_SHOP_ID;
 
-// ⏳ Sleep
+// ⏱️ API COOLDOWN TIMERS (Adjust here if you hit rate limits)
+const IMAGE_DELAY_MS = 10000; // 10 seconds before hitting Printify
+const BATCH_DELAY_MS = 5000;  // 5 seconds between variations
+
+// ⏳ Sleep Helper
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // 🧠 Memory
 let conversationHistory = [];
-let usedNiches = new Set();
+let usedNiches = new Set(); // Note: This wipes when Railway restarts
 
 // 🔒 Token Control
 let dailyTokenUsage = 0;
@@ -38,7 +42,7 @@ try {
   }
 } catch {}
 
-// 🤖 GROQ
+// 🤖 GROQ MODELS
 const MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
 
 async function askGroq(prompt, maxTokens = 500) {
@@ -60,7 +64,7 @@ async function askGroq(prompt, maxTokens = 500) {
 
     } catch (err) {
       if (err.response?.data?.code !== "model_permission_blocked_project") {
-        console.error(err.message);
+        console.error("Groq Error:", err.message);
         return null;
       }
     }
@@ -119,11 +123,11 @@ async function gemini(prompt) {
     { contents: [{ parts: [{ text: prompt }] }] }
   );
   const part = res.data.candidates[0].content.parts.find(p => p.inlineData);
-  if (!part) throw new Error("No image");
+  if (!part) throw new Error("No image data returned.");
   return part.inlineData.data;
 }
 
-// 🖌️ FAL fallback
+// 🖌️ FAL Fallback
 async function fal(prompt) {
   const res = await axios.post("https://fal.run/fal-ai/flux/schnell",
     { prompt, image_size: "square_hd" },
@@ -133,37 +137,41 @@ async function fal(prompt) {
   return Buffer.from(img.data).toString("base64");
 }
 
-// 🖌️ Router
+// 🖌️ Master Image Router
 async function generateImage(prompt) {
-  try { return await gemini(prompt); }
-  catch { return await fal(prompt); }
+  try { 
+    return await gemini(prompt); 
+  } catch (err) { 
+    console.log(`⚠️ Gemini failed (${err.message}), falling back to FAL...`);
+    return await fal(prompt); 
+  }
 }
 
-// 📤 Upload
+// 📤 Upload to Printify
 async function upload(image, niche) {
   const res = await axios.post(
     "https://api.printify.com/v1/uploads/images.json",
-    { file_name: `${niche}_${Date.now()}.png`, contents: image },
+    { file_name: `${niche.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${Date.now()}.png`, contents: image },
     { headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` } }
   );
   return res.data.id;
 }
 
-// 🛒 Create Product
+// 🛒 Create Product Workflow
 async function createProduct(channel = null) {
   try {
     const niche = await performMarketResearch();
-    await sendSlack(`🎯 ${niche}`, channel);
+    await sendSlack(`🎯 Target Niche: *${niche}*`, channel);
 
     const product = await generateProductData(niche);
 
     for (let i = 1; i <= 3; i++) {
-      await sendSlack(`🎨 Design ${i}/3`, channel);
+      await sendSlack(`🎨 Generating Design ${i}/3...`, channel);
 
       const prompt = await generateDesignPrompt(niche, `Variation ${i}`);
       const image = await generateImage(prompt);
 
-      await sleep(1500);
+      await sleep(IMAGE_DELAY_MS); // API Cooldown before upload
       const imageId = await upload(image, niche);
 
       const catalog = await axios.get(
@@ -172,15 +180,15 @@ async function createProduct(channel = null) {
       );
 
       const variantId = catalog.data.variants.find(v => v.is_enabled)?.id;
-      if (!variantId) throw new Error("No variant");
+      if (!variantId) throw new Error("No available print variant found.");
 
       const payload = {
-        title: product.title + ` V${i}`,
+        title: `${product.title} - V${i}`,
         description: product.description,
         tags: product.tags,
         blueprint_id: 12,
         print_provider_id: 29,
-        visible: false, // 👈 stays in Printify for review
+        visible: false, // 👈 Stays hidden in Printify for your manual QA review
         variants: [{ id: variantId, price: 2900, is_enabled: true }],
         print_areas: [{
           variant_ids: [variantId],
@@ -198,18 +206,18 @@ async function createProduct(channel = null) {
       );
 
       stats.created++;
-      await sleep(2000);
+      if (i < 3) await sleep(BATCH_DELAY_MS); // Cooldown before generating the next variation
     }
 
-    await sendSlack("✅ 3 designs created (ready for review in Printify)", channel);
+    await sendSlack("✅ All 3 designs created successfully! Ready for your review in Printify.", channel);
 
   } catch (err) {
     console.error(err);
-    await sendSlack(`❌ ${err.message}`, channel);
+    await sendSlack(`❌ Error: ${err.message}`, channel);
   }
 }
 
-// 📢 Slack
+// 📢 Slack Messenger
 async function sendSlack(text, channel) {
   if (!channel) return;
   await axios.post("https://slack.com/api/chat.postMessage",
@@ -218,31 +226,44 @@ async function sendSlack(text, channel) {
   );
 }
 
-// 📊 Daily Report
+// 📊 Daily Report Timer
 setInterval(async () => {
-  await sendSlack(`📊 Daily Report:\nProducts Created: ${stats.created}`, "#general");
+  await sendSlack(`📊 *Daily Report:*\nTotal Drafts Created: ${stats.created}`, "#general");
   stats = { created: 0 };
   dailyTokenUsage = 0;
 }, 1000 * 60 * 60 * 24);
 
-// 🔁 Auto Run
+// 🔁 Auto Run Timer (Every 12 hours)
 setInterval(async () => {
+  console.log("🤖 Running scheduled batch...");
   await createProduct("#general");
 }, 1000 * 60 * 60 * 12);
 
-// 🔥 Slack Commands
+// 🔥 Slack Commands & Conversation
 app.post("/slack/events", async (req, res) => {
   const b = req.body;
   if (b.type === "url_verification") return res.send(b.challenge);
   res.sendStatus(200);
 
-  const txt = b.event?.text?.toLowerCase() || "";
+  // Prevent bot feedback loops
+  if (b.event?.bot_id) return;
+
+  const originalText = b.event?.text || "";
+  const txt = originalText.toLowerCase();
   const ch = b.event?.channel;
 
-  if (txt.includes("post now")) await createProduct(ch);
+  if (txt) {
+    if (txt.includes("post now")) {
+      await createProduct(ch);
+    } else {
+      // If it's not a command, Ben chats normally
+      const reply = await askGroq(originalText);
+      if (reply) await sendSlack(reply, ch);
+    }
+  }
 });
 
-// 🧪 Health
-app.get("/", (_, res) => res.send("Ben v2 is live 🚀"));
+// 🧪 Health Check
+app.get("/", (_, res) => res.send("Ben v2.1 is live 🚀 (Conversational & Paced)"));
 
-app.listen(PORT, () => console.log(`⚡ Running on ${PORT}`));
+app.listen(PORT, () => console.log(`⚡ Running on port ${PORT}`));
