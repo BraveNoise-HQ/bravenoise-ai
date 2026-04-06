@@ -16,8 +16,12 @@ const PRINTIFY_SHOP_ID = process.env.PRINTIFY_SHOP_ID;
 
 const MODEL_NAME = "gemini-3-flash-preview";
 
-// 🧠 MEMORY
+// 🧠 MEMORY (limited)
 let conversationHistory = [];
+
+// 🔒 TOKEN CONTROL
+let dailyTokenUsage = 0;
+const DAILY_TOKEN_LIMIT = 20000;
 
 // 🎨 DESIGN RULES
 let designSpecs = "Minimalist, bold typography, clean layout.";
@@ -27,7 +31,7 @@ try {
   }
 } catch (err) {}
 
-// 🔍 TREND KEYWORDS (temporary)
+// 🔍 TREND KEYWORDS
 const TREND_KEYWORDS = [
   "stoic quotes",
   "self discipline",
@@ -41,9 +45,15 @@ const TREND_KEYWORDS = [
   "no excuses"
 ];
 
-// 🤖 GEMINI CALL
+// 🤖 GEMINI CALL (WITH TOKEN LIMIT)
 async function askGemini(prompt) {
   try {
+    const estimatedTokens = prompt.length / 4;
+
+    if (dailyTokenUsage + estimatedTokens > DAILY_TOKEN_LIMIT) {
+      return "⚠️ Daily token limit reached. Try again tomorrow.";
+    }
+
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
 
     const response = await axios.post(url, {
@@ -52,17 +62,24 @@ async function askGemini(prompt) {
         { role: "user", parts: [{ text: prompt }] }
       ],
       generationConfig: {
-        temperature: 0.8,
-        maxOutputTokens: 800
+        temperature: 0.7,
+        maxOutputTokens: 300 // 🔥 reduced
       }
     });
 
-    const reply = response.data.candidates?.[0]?.content?.parts?.[0]?.text || "No response.";
+    const reply =
+      response.data.candidates?.[0]?.content?.parts?.[0]?.text ||
+      "No response.";
 
+    // track tokens
+    dailyTokenUsage += estimatedTokens;
+
+    // memory update
     conversationHistory.push({ role: "user", parts: [{ text: prompt }] });
     conversationHistory.push({ role: "model", parts: [{ text: reply }] });
 
-    conversationHistory = conversationHistory.slice(-10);
+    // keep memory small
+    conversationHistory = conversationHistory.slice(-4);
 
     return reply;
 
@@ -185,7 +202,13 @@ setInterval(async () => {
     console.error("Auto Loop Error:", err.message);
   }
 
-}, 1000 * 60 * 60 * 24); // 24h
+}, 1000 * 60 * 60 * 24);
+
+// 🔄 RESET TOKEN DAILY
+setInterval(() => {
+  console.log("🔄 Resetting daily token usage");
+  dailyTokenUsage = 0;
+}, 1000 * 60 * 60 * 24);
 
 // 💬 SLACK EVENTS
 app.post("/slack/events", async (req, res) => {
@@ -216,10 +239,21 @@ app.post("/slack/events", async (req, res) => {
         return;
       }
 
-      // 🧠 NORMAL CHAT
+      // 💰 ONLY RESPOND TO BUSINESS-RELATED PROMPTS
+      if (!text.includes("idea") && !text.includes("product") && !text.includes("etsy")) {
+        return;
+      }
+
+      // 🧠 SMART CHAT
       const reply = await askGemini(`
 You are Ben, Eric’s AI business partner.
-Be smart, helpful, and concise.
+
+Focus on:
+- Etsy growth
+- Product ideas
+- Income generation
+
+Be concise.
 
 User: ${event.text}
 `);
@@ -238,5 +272,5 @@ app.get("/", (req, res) => {
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("🚀 Ben running (no-cron stable)");
+  console.log("🚀 Ben running (token-safe mode)");
 });
