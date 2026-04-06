@@ -8,8 +8,8 @@ app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 8080;
 
-// ENV
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+// ENV (MATCHES YOUR VARIABLE NAME)
+const OPENAI_API_KEY = process.env.OPEN_AI_API_KEY;
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const PRINTIFY_TOKEN = process.env.PRINTIFY_API_TOKEN;
 const PRINTIFY_SHOP_ID = process.env.PRINTIFY_SHOP_ID;
@@ -79,7 +79,6 @@ async function askOpenAI(prompt) {
     conversationHistory.push({ role: "user", content: prompt });
     conversationHistory.push({ role: "assistant", content: reply });
 
-    // keep memory short
     conversationHistory = conversationHistory.slice(-4);
 
     return reply;
@@ -252,14 +251,12 @@ app.post("/slack/events", async (req, res) => {
     const text = event.text.toLowerCase();
 
     try {
-      // 🔥 manual single post
       if (text.includes("post now")) {
         const title = await createProduct();
         await sendSlackMessage(`🚀 Product created:\n${title}`, event.channel);
         return;
       }
 
-      // 🔥 manual batch
       if (text.includes("post 3")) {
         for (let i = 0; i < 3; i++) {
           const title = await createProduct();
@@ -268,7 +265,6 @@ app.post("/slack/events", async (req, res) => {
         return;
       }
 
-      // 🧠 smart replies (limited)
       if (!text.includes("product") && !text.includes("etsy") && !text.includes("idea")) {
         return;
       }
@@ -291,7 +287,7 @@ User: ${event.text}
   }
 });
 
-// HEALTH CHECK
+// HEALTH
 app.get("/", (req, res) => {
   res.send("🚀 Ben Level 3 running (money mode)");
 });
