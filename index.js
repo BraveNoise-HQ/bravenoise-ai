@@ -10,7 +10,8 @@ const PORT = process.env.PORT || 8080;
 
 // 🔐 ENV VARIABLES
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // Powers the Image Generation
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const FAL_KEY = process.env.FAL_KEY; // Fallback Designer
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const PRINTIFY_TOKEN = process.env.PRINTIFY_API_TOKEN;
 const PRINTIFY_SHOP_ID = process.env.PRINTIFY_SHOP_ID;
@@ -138,39 +139,61 @@ Return ONLY the prompt text, nothing else.
   return designPrompt || `A minimalist typography design for ${niche}, bold font, clean, pure white background.`;
 }
 
-// 🖌️ 4. CREATE IMAGE (Gemini 3.1 Flash Image)
+// 🖌️ 4A. GEMINI IMAGE GENERATOR
+async function callGeminiImage(imagePrompt) {
+  const response = await axios.post(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${GEMINI_API_KEY}`,
+    {
+      contents: [
+        { parts: [{ text: imagePrompt }] }
+      ]
+    },
+    { headers: { "Content-Type": "application/json" } }
+  );
+
+  const parts = response.data.candidates[0].content.parts;
+  const imagePart = parts.find(p => p.inlineData);
+
+  if (!imagePart) throw new Error("No image data returned from Gemini.");
+  return imagePart.inlineData.data; // Returns pure base64
+}
+
+// 🖌️ 4B. FAL.AI IMAGE GENERATOR (Fallback)
+async function callFalImage(imagePrompt) {
+  const response = await axios.post(
+    "https://fal.run/fal-ai/flux/schnell",
+    {
+      prompt: imagePrompt,
+      image_size: "square_hd"
+    },
+    {
+      headers: {
+        Authorization: `Key ${FAL_KEY}`,
+        "Content-Type": "application/json"
+      }
+    }
+  );
+
+  const imageUrl = response.data.images[0].url;
+  
+  // Convert URL to Base64 in memory
+  const imgResponse = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+  return Buffer.from(imgResponse.data, 'binary').toString('base64');
+}
+
+// 🖌️ 4C. THE MASTER IMAGE ROUTER
 async function generateImage(imagePrompt) {
   try {
-    const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        contents: [
-          {
-            parts: [
-              { text: imagePrompt }
-            ]
-          }
-        ]
-      },
-      {
-        headers: { "Content-Type": "application/json" }
-      }
-    );
-
-    // Gemini returns the generated image inside the parts array as inlineData
-    const parts = response.data.candidates[0].content.parts;
-    const imagePart = parts.find(p => p.inlineData);
-
-    if (!imagePart) {
-      throw new Error("No image data returned from Gemini.");
-    }
-    
-    // Return pure base64 for Printify
-    return imagePart.inlineData.data;
-
+    console.log("🎨 Attempting to draw with Gemini...");
+    return await callGeminiImage(imagePrompt);
   } catch (err) {
-    console.error("Gemini Image Error:", err.response?.data?.error?.message || err.message);
-    throw new Error("Failed to generate image with Gemini.");
+    console.log(`⚠️ Gemini failed (${err.message}). Switching to FAL (Flux)...`);
+    try {
+      return await callFalImage(imagePrompt);
+    } catch (falErr) {
+      console.error("❌ FAL Image Error:", falErr.response?.data || falErr.message);
+      throw new Error("Both Gemini and FAL designers are currently offline.");
+    }
   }
 }
 
@@ -219,7 +242,6 @@ async function createProduct(channel = null) {
     await sendSlackMessage(`🎨 Generating custom design idea...`, channel);
     const imagePrompt = await generateDesignPrompt(niche);
 
-    await sendSlackMessage(`🖌️ Drawing image with Gemini...`, channel);
     const imageData = await generateImage(imagePrompt);
 
     await sendSlackMessage(`📤 Uploading fresh design to Printify...`, channel);
@@ -311,7 +333,7 @@ app.post("/slack/events", async (req, res) => {
 
 // 🧪 HEALTH CHECK
 app.get("/", (req, res) => {
-  res.send("🚀 Ben is alive, designing with Gemini, and fully automated");
+  res.send("🚀 Ben is alive, designing with Gemini/Fal, and fully automated");
 });
 
 // 🚀 START SERVER
