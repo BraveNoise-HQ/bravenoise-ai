@@ -2,6 +2,7 @@ import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
 import fs from "fs";
+import cron from "node-cron";
 
 const app = express();
 app.use(bodyParser.json());
@@ -39,7 +40,6 @@ async function askGroq(prompt, maxTokens = 500) {
   for (const model of GROQ_MODELS) {
     try {
       const estimatedTokens = prompt.length / 4;
-
       if (dailyTokenUsage + estimatedTokens > DAILY_TOKEN_LIMIT) {
         console.log("⚠️ Token limit reached");
         return "⚠️ Daily AI limit reached.";
@@ -56,12 +56,7 @@ async function askGroq(prompt, maxTokens = 500) {
           max_tokens: maxTokens,
           temperature: 0.7
         },
-        {
-          headers: {
-            Authorization: `Bearer ${GROQ_API_KEY}`,
-            "Content-Type": "application/json"
-          }
-        }
+        { headers: { Authorization: `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" } }
       );
 
       const reply = response.data.choices?.[0]?.message?.content || "";
@@ -77,7 +72,7 @@ async function askGroq(prompt, maxTokens = 500) {
       lastError = err;
       if (err.response?.data?.code === "model_permission_blocked_project") {
         console.warn(`⚠️ Model ${model} blocked, trying next...`);
-        continue; // try next model
+        continue;
       } else {
         console.error("Groq Error:", err.response?.data || err.message);
         return "⚠️ AI error.";
@@ -124,26 +119,18 @@ Return ONLY JSON:
 
 STYLE: ${designSpecs}
 `;
-
   const raw = await askGroq(prompt, 800);
   const parsed = extractJSON(raw);
 
-  if (!parsed || !parsed.title) {
-    throw new Error("Invalid AI JSON output");
-  }
-
+  if (!parsed || !parsed.title) throw new Error("Invalid AI JSON output");
   return parsed;
 }
 
 // 🖼 GET IMAGE
 async function getLatestImage() {
-  const res = await axios.get(
-    "https://api.printify.com/v1/uploads.json?limit=1",
-    {
-      headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` }
-    }
-  );
-
+  const res = await axios.get("https://api.printify.com/v1/uploads.json?limit=1", {
+    headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` }
+  });
   return res.data.data?.[0]?.id;
 }
 
@@ -152,31 +139,48 @@ async function sendSlackMessage(text, channel) {
   await axios.post(
     "https://slack.com/api/chat.postMessage",
     { channel, text },
-    {
-      headers: {
-        Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
-        "Content-Type": "application/json"
-      }
-    }
+    { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}`, "Content-Type": "application/json" } }
   );
 }
 
-// 🛒 CREATE PRODUCT FLOW
+// 🛒 CREATE PRINTIFY PRODUCT
+async function createPrintifyProduct(productData, imageId) {
+  const payload = {
+    title: productData.title,
+    description: productData.description,
+    blueprint_id: 12,          // T-shirt blueprint
+    print_provider_id: 29,     // Provider ID
+    variants: [{ variant_id: 4012, price: 25 }], // example variant
+    images: [{ id: imageId }],
+    tags: productData.tags
+  };
+
+  const res = await axios.post(
+    `https://api.printify.com/v1/shops/${PRINTIFY_SHOP_ID}/products.json`,
+    payload,
+    { headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` } }
+  );
+
+  return res.data;
+}
+
+// 🛠 FULL PRODUCT FLOW
 async function createProduct(channel) {
   try {
     await sendSlackMessage("📊 Researching market...", channel);
     const niche = await performMarketResearch();
-
     await sendSlackMessage(`🎯 Niche: *${niche}*`, channel);
 
     const product = await generateProductData(niche);
-
     await sendSlackMessage(`📝 Title:\n${product.title}`, channel);
 
     const imageId = await getLatestImage();
     if (!imageId) throw new Error("No image found.");
 
-    await sendSlackMessage("✅ Product ready (listing + design).", channel);
+    await sendSlackMessage("🖼 Creating product on Printify...", channel);
+    const printifyResponse = await createPrintifyProduct(product, imageId);
+
+    await sendSlackMessage(`✅ Product created! ID: ${printifyResponse.id}`, channel);
 
   } catch (err) {
     console.error(err);
@@ -184,16 +188,19 @@ async function createProduct(channel) {
   }
 }
 
+// 🔁 SCHEDULED AUTOMATION (2x/day)
+cron.schedule("0 10,16 * * *", async () => {
+  console.log("⏰ Scheduled trigger: Creating product flow");
+  const CHANNEL_ID = "YOUR_SLACK_CHANNEL_ID"; // replace with your Slack channel
+  await createProduct(CHANNEL_ID);
+});
+
 // 🔥 SLACK EVENTS ENDPOINT
 app.post("/slack/events", async (req, res) => {
   const body = req.body;
 
-  // Slack URL verification
-  if (body.type === "url_verification") {
-    return res.send(body.challenge);
-  }
+  if (body.type === "url_verification") return res.send(body.challenge);
 
-  // Handle messages
   if (body.event && body.event.type === "message" && !body.event.bot_id) {
     const text = body.event.text;
     const channel = body.event.channel;
@@ -212,11 +219,7 @@ app.post("/slack/events", async (req, res) => {
 });
 
 // 🧪 HEALTH CHECK
-app.get("/", (req, res) => {
-  res.send("🚀 Ben is alive");
-});
+app.get("/", (req, res) => res.send("🚀 Ben is alive"));
 
 // 🚀 START SERVER
-app.listen(PORT, () => {
-  console.log(`⚡ Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`⚡ Server running on port ${PORT}`));
