@@ -10,7 +10,6 @@ const PORT = process.env.PORT || 8080;
 
 // 🔐 ENV VARIABLES
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-13b"; // change if your org has another model
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const PRINTIFY_TOKEN = process.env.PRINTIFY_API_TOKEN;
 const PRINTIFY_SHOP_ID = process.env.PRINTIFY_SHOP_ID;
@@ -30,48 +29,64 @@ try {
   }
 } catch {}
 
-// 🤖 GROQ API CALL
+// 🔄 GROQ MODELS (try first → fallback)
+const GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
+
+// 🤖 GROQ API CALL WITH FALLBACK
 async function askGroq(prompt, maxTokens = 500) {
-  try {
-    const estimatedTokens = prompt.length / 4;
+  let lastError = null;
 
-    if (dailyTokenUsage + estimatedTokens > DAILY_TOKEN_LIMIT) {
-      console.log("⚠️ Token limit reached");
-      return "⚠️ Daily AI limit reached.";
-    }
+  for (const model of GROQ_MODELS) {
+    try {
+      const estimatedTokens = prompt.length / 4;
 
-    const response = await axios.post(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        model: GROQ_MODEL,
-        messages: [
-          ...conversationHistory,
-          { role: "user", content: prompt }
-        ],
-        max_tokens: maxTokens,
-        temperature: 0.7
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${GROQ_API_KEY}`,
-          "Content-Type": "application/json"
-        }
+      if (dailyTokenUsage + estimatedTokens > DAILY_TOKEN_LIMIT) {
+        console.log("⚠️ Token limit reached");
+        return "⚠️ Daily AI limit reached.";
       }
-    );
 
-    const reply = response.data.choices?.[0]?.message?.content || "";
-    dailyTokenUsage += estimatedTokens;
+      const response = await axios.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          model,
+          messages: [
+            ...conversationHistory,
+            { role: "user", content: prompt }
+          ],
+          max_tokens: maxTokens,
+          temperature: 0.7
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${GROQ_API_KEY}`,
+            "Content-Type": "application/json"
+          }
+        }
+      );
 
-    conversationHistory.push({ role: "user", content: prompt });
-    conversationHistory.push({ role: "assistant", content: reply });
-    conversationHistory = conversationHistory.slice(-4);
+      const reply = response.data.choices?.[0]?.message?.content || "";
+      dailyTokenUsage += estimatedTokens;
 
-    return reply;
+      conversationHistory.push({ role: "user", content: prompt });
+      conversationHistory.push({ role: "assistant", content: reply });
+      conversationHistory = conversationHistory.slice(-4);
 
-  } catch (err) {
-    console.error("Groq Error:", err.response?.data || err.message);
-    return "⚠️ AI error.";
+      return reply;
+
+    } catch (err) {
+      lastError = err;
+      if (err.response?.data?.code === "model_permission_blocked_project") {
+        console.warn(`⚠️ Model ${model} blocked, trying next...`);
+        continue; // try next model
+      } else {
+        console.error("Groq Error:", err.response?.data || err.message);
+        return "⚠️ AI error.";
+      }
+    }
   }
+
+  console.error("All models blocked or failed:", lastError?.message);
+  return "⚠️ No models available for your org.";
 }
 
 // 🧠 SAFE JSON PARSER
