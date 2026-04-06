@@ -138,31 +138,35 @@ Return ONLY the prompt text, nothing else.
   return designPrompt || `A minimalist typography design for ${niche}, bold font, clean, pure white background.`;
 }
 
-// 🖌️ 4. CREATE IMAGE (Gemini / Imagen 3)
+// 🖌️ 4. CREATE IMAGE (Gemini 3.1 Flash Image)
 async function generateImage(imagePrompt) {
   try {
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:predict?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${GEMINI_API_KEY}`,
       {
-        instances: [
-          { prompt: imagePrompt }
-        ],
-        parameters: {
-          sampleCount: 1,
-          outputMimeType: "image/png",
-          aspectRatio: "1:1"
-        }
+        contents: [
+          {
+            parts: [
+              { text: imagePrompt }
+            ]
+          }
+        ]
       },
       {
         headers: { "Content-Type": "application/json" }
       }
     );
 
-    // Grab the raw base64 string from the API response
-    const base64Image = response.data.predictions[0].bytesBase64Encoded;
+    // Gemini returns the generated image inside the parts array as inlineData
+    const parts = response.data.candidates[0].content.parts;
+    const imagePart = parts.find(p => p.inlineData);
+
+    if (!imagePart) {
+      throw new Error("No image data returned from Gemini.");
+    }
     
     // Return pure base64 for Printify
-    return base64Image;
+    return imagePart.inlineData.data;
 
   } catch (err) {
     console.error("Gemini Image Error:", err.response?.data?.error?.message || err.message);
