@@ -87,7 +87,8 @@ async function safeRequest(method, url, data = null, headers = {}, extraConfig =
   }
 }
 
-// 🧠 STATE
+// 🧠 STATE & MEMORY
+let chatHistory = [];
 let usedNiches = new Set();
 let stats = { created: 0 };
 
@@ -99,20 +100,43 @@ try {
   }
 } catch {}
 
-// 🤖 GROQ
-async function askGroq(prompt) {
+// 🤖 GROQ & PERSONALITY
+const BEN_PERSONA = `You are Ben, a warm, approachable, and enthusiastic AI business operator. Your goal is to manage and automate an Etsy Print-on-Demand business. 
+You know your human partner is a talented professional photographer, graphic designer, and video editor. Your job is to handle the heavy lifting—market research, SEO, bulk AI design generation, and Printify uploads—so they can review and approve your drafts. 
+Be supportive, knowledgeable, and friendly, but keep your responses concise and actionable.`;
+
+async function askGroq(prompt, isChat = false) {
   try {
+    const messages = [];
+    
+    if (isChat) {
+      messages.push({ role: "system", content: BEN_PERSONA });
+      messages.push(...chatHistory);
+    } else {
+      messages.push({ role: "system", content: "You are an expert backend processor. Output strictly what is requested." });
+    }
+    
+    messages.push({ role: "user", content: prompt });
+
     const res = await safeRequest(
       "POST",
       "https://api.groq.com/openai/v1/chat/completions",
       {
         model: "llama-3.3-70b-versatile",
-        messages: [{ role: "user", content: prompt }]
+        messages: messages
       },
       { Authorization: `Bearer ${GROQ_API_KEY}` }
     );
 
-    return res.choices?.[0]?.message?.content || "";
+    const reply = res.choices?.[0]?.message?.content || "";
+
+    if (isChat) {
+      chatHistory.push({ role: "user", content: prompt });
+      chatHistory.push({ role: "assistant", content: reply });
+      if (chatHistory.length > 8) chatHistory = chatHistory.slice(-8); 
+    }
+
+    return reply;
   } catch (err) {
     log("error", "Groq failed", { error: err.message });
     return null;
@@ -122,7 +146,7 @@ async function askGroq(prompt) {
 // 🎯 NICHE
 async function getNiche() {
   for (let i = 0; i < 5; i++) {
-    const n = (await askGroq("Give ONE profitable t-shirt niche."))?.trim();
+    const n = (await askGroq("Give ONE profitable t-shirt niche.", false))?.trim();
     if (n && !usedNiches.has(n)) {
       usedNiches.add(n);
       return n;
@@ -133,7 +157,7 @@ async function getNiche() {
 
 // 🧾 PRODUCT DATA
 async function getProduct(niche) {
-  const raw = await askGroq(`Create Etsy listing JSON for "${niche}"`);
+  const raw = await askGroq(`Create Etsy listing JSON for "${niche}"`, false);
   try {
     return JSON.parse(raw.match(/\{[\s\S]*\}/)[0]);
   } catch {
@@ -143,7 +167,7 @@ async function getProduct(niche) {
 
 // 🎨 PROMPT
 async function getPrompt(niche, v) {
-  return await askGroq(`T-shirt design for ${niche}, variation ${v}, ${designSpecs}`);
+  return await askGroq(`T-shirt design for ${niche}, variation ${v}, ${designSpecs}`, false);
 }
 
 // 🖼️ GEMINI
@@ -188,10 +212,17 @@ async function fal(prompt) {
   return Buffer.from(img).toString("base64");
 }
 
-// 🖼️ PLACEHOLDER
+// 🖼️ PLACEHOLDER (Restored Quotes)
 async function placeholder(niche) {
-  const text = encodeURIComponent(niche.toUpperCase());
-  const url = `https://dummyimage.com/1024x1024/ffffff/000000.png&text=${text}`;
+  const quotes = [
+    "It's a trap!", "Affirmative.", "Game over, man!", "Do a barrel roll!", 
+    "Stay frosty.", "Finish him!", "Why so serious?", "You shall not pass!", 
+    "Praise the sun!", "Wasted.", "I know what you did.", "I'll be back."
+  ];
+  const randomQuote = quotes[Math.floor(Math.random() * quotes.length)];
+  const safeText = encodeURIComponent(`${niche.toUpperCase()} - "${randomQuote.toUpperCase()}"`);
+  
+  const url = `https://dummyimage.com/1024x1024/ffffff/000000.png&text=${safeText}`;
   const img = await safeRequest("GET", url, null, {}, { responseType: "arraybuffer" });
   return Buffer.from(img).toString("base64");
 }
@@ -218,7 +249,7 @@ async function upload(image, niche) {
     "POST",
     "https://api.printify.com/v1/uploads/images.json",
     {
-      file_name: `${niche}_${Date.now()}.png`,
+      file_name: `${niche.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${Date.now()}.png`,
       contents: image
     },
     { Authorization: `Bearer ${PRINTIFY_API_TOKEN}` }
@@ -292,7 +323,7 @@ async function createProduct(channel = "#general") {
       if (i < 3) await sleep(BATCH_DELAY_MS);
     }
 
-    await sendSlack(`✅ Batch complete\nNiche: ${niche}\nTotal: 3 designs`, channel);
+    await sendSlack(`✅ Batch complete\nNiche: *${niche}*\nTotal: 3 designs ready for review.`, channel);
 
   } catch (err) {
     log("error", "Product failed", { error: err.message });
@@ -312,6 +343,32 @@ setInterval(() => {
   stats = { created: 0 };
 }, 1000 * 60 * 60 * 24);
 
+// 🔥 SLACK EVENTS (Restored listener for chat and commands)
+app.post("/slack/events", async (req, res) => {
+  const b = req.body;
+  if (b.type === "url_verification") return res.send(b.challenge);
+  
+  if (req.headers['x-slack-retry-num']) return res.sendStatus(200);
+  res.sendStatus(200);
+
+  if (b.event?.bot_id) return;
+
+  const originalText = b.event?.text || "";
+  const txt = originalText.toLowerCase();
+  const ch = b.event?.channel;
+
+  if (txt) {
+    log("info", "Slack message received", { text: originalText });
+
+    if (txt.includes("post now") || txt.includes("create product")) {
+      await createProduct(ch);
+    } else {
+      const reply = await askGroq(originalText, true);
+      if (reply) await sendSlack(reply, ch);
+    }
+  }
+});
+
 // 🔥 GLOBAL ERROR HANDLERS
 process.on("unhandledRejection", async (err) => {
   log("error", "Unhandled rejection", { error: err.message });
@@ -324,6 +381,6 @@ process.on("uncaughtException", async (err) => {
 });
 
 // 🌐 SERVER
-app.get("/", (_, res) => res.send("Ben v4.5 running 🚀"));
+app.get("/", (_, res) => res.send("Ben v4.5.1 running 🚀"));
 
 app.listen(PORT, () => log("info", `Server running on ${PORT}`));
