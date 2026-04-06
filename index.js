@@ -9,12 +9,12 @@ app.use(bodyParser.json());
 const PORT = process.env.PORT || 8080;
 
 // ENV
-const OPEN_AI_API_KEY = process.env.OPEN_AI_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const PRINTIFY_TOKEN = process.env.PRINTIFY_API_TOKEN;
 const PRINTIFY_SHOP_ID = process.env.PRINTIFY_SHOP_ID;
 
-// 🧠 MEMORY
+// 🧠 MEMORY (light)
 let conversationHistory = [];
 
 // 🔒 TOKEN CONTROL
@@ -29,18 +29,18 @@ try {
   }
 } catch {}
 
-// 🔍 TREND KEYWORDS
-const TREND_KEYWORDS = [
-  "stoic quotes",
-  "self discipline",
-  "gym motivation",
-  "quiet luxury",
-  "minimal mindset",
-  "success habits",
-  "alpha mindset",
-  "deep work",
-  "focus mode",
-  "no excuses"
+// 🔥 NICHE STRATEGY
+const NICHE_COMBINATIONS = [
+  "stoic discipline gym mindset",
+  "minimalist success quotes",
+  "quiet luxury aesthetic text",
+  "alpha male focus motivation",
+  "deep work productivity mindset",
+  "self mastery stoicism",
+  "no excuses fitness mindset",
+  "clean typography motivation",
+  "modern minimal confidence quote",
+  "success driven lifestyle"
 ];
 
 // 🤖 OPENAI CALL
@@ -49,6 +49,7 @@ async function askOpenAI(prompt) {
     const estimatedTokens = prompt.length / 4;
 
     if (dailyTokenUsage + estimatedTokens > DAILY_TOKEN_LIMIT) {
+      console.log("⚠️ Token limit reached");
       return null;
     }
 
@@ -78,6 +79,7 @@ async function askOpenAI(prompt) {
     conversationHistory.push({ role: "user", content: prompt });
     conversationHistory.push({ role: "assistant", content: reply });
 
+    // keep memory short
     conversationHistory = conversationHistory.slice(-4);
 
     return reply;
@@ -88,7 +90,7 @@ async function askOpenAI(prompt) {
   }
 }
 
-// 🧠 EXTRACT JSON SAFELY
+// 🧠 SAFE JSON PARSER
 function extractJSON(text) {
   try {
     const match = text.match(/\{[\s\S]*\}/);
@@ -101,24 +103,35 @@ function extractJSON(text) {
 
 // 🎯 GENERATE PRODUCT
 async function generateProductData() {
-  const keyword = TREND_KEYWORDS[Math.floor(Math.random() * TREND_KEYWORDS.length)];
+  const niche = NICHE_COMBINATIONS[Math.floor(Math.random() * NICHE_COMBINATIONS.length)];
 
   const prompt = `
-Return ONLY valid JSON:
+You are a top 1% Etsy SEO expert.
+
+Return ONLY JSON:
 
 {
   "title": "...",
   "description": "...",
-  "tags": ["tag1","tag2","tag3","tag4","tag5","tag6","tag7","tag8","tag9","tag10"]
+  "tags": ["","","","","","","","","",""]
 }
 
-Rules:
-- SEO optimized title
-- Clean description
+RULES:
+
+TITLE:
+- 120-140 characters
+- SEO optimized
+
+DESCRIPTION:
+- Strong first line hook
+- Clean formatting
 - No AI/meta text
 
-Keyword: ${keyword}
-Style: ${designSpecs}
+TAGS:
+- 10 real Etsy search phrases
+
+NICHE: ${niche}
+STYLE: ${designSpecs}
 `;
 
   const raw = await askOpenAI(prompt);
@@ -131,7 +144,7 @@ Style: ${designSpecs}
   return parsed;
 }
 
-// 🖼 IMAGE
+// 🖼 GET IMAGE
 async function getLatestImage() {
   const res = await axios.get("https://api.printify.com/v1/uploads.json?limit=1", {
     headers: { Authorization: `Bearer ${PRINTIFY_TOKEN}` }
@@ -185,7 +198,7 @@ async function createProduct() {
   return product.title;
 }
 
-// 📢 SLACK
+// 📢 SLACK MESSAGE
 async function sendSlackMessage(text, channel) {
   await axios.post("https://slack.com/api/chat.postMessage", {
     channel,
@@ -195,26 +208,33 @@ async function sendSlackMessage(text, channel) {
   });
 }
 
-// 🔁 AUTO LOOP
+// 🔁 AUTO POST (3 PRODUCTS DAILY)
 setInterval(async () => {
-  console.log("🤖 Auto posting...");
+  console.log("🤖 Level 3 batch posting...");
 
   try {
-    const title = await createProduct();
-    await sendSlackMessage(`🚀 New product created:\n${title}`, "#general");
+    for (let i = 0; i < 3; i++) {
+      const title = await createProduct();
+
+      await sendSlackMessage(
+        `🚀 Product ${i + 1} created:\n${title}`,
+        "#general"
+      );
+    }
+
   } catch (err) {
-    console.error("Auto Error:", err.message);
+    console.error("Batch Error:", err.message);
   }
 
 }, 1000 * 60 * 60 * 24);
 
-// 🔄 RESET TOKENS
+// 🔄 RESET TOKENS DAILY
 setInterval(() => {
   dailyTokenUsage = 0;
   console.log("🔄 Tokens reset");
 }, 1000 * 60 * 60 * 24);
 
-// 💬 SLACK
+// 💬 SLACK EVENTS
 app.post("/slack/events", async (req, res) => {
   if (req.headers['x-slack-retry-num']) return res.status(200).send("OK");
 
@@ -232,12 +252,23 @@ app.post("/slack/events", async (req, res) => {
     const text = event.text.toLowerCase();
 
     try {
+      // 🔥 manual single post
       if (text.includes("post now")) {
         const title = await createProduct();
-        await sendSlackMessage(`🚀 Manual product created:\n${title}`, event.channel);
+        await sendSlackMessage(`🚀 Product created:\n${title}`, event.channel);
         return;
       }
 
+      // 🔥 manual batch
+      if (text.includes("post 3")) {
+        for (let i = 0; i < 3; i++) {
+          const title = await createProduct();
+          await sendSlackMessage(`🚀 ${title}`, event.channel);
+        }
+        return;
+      }
+
+      // 🧠 smart replies (limited)
       if (!text.includes("product") && !text.includes("etsy") && !text.includes("idea")) {
         return;
       }
@@ -245,7 +276,7 @@ app.post("/slack/events", async (req, res) => {
       const reply = await askOpenAI(`
 You are Ben, an AI business operator focused on Etsy growth.
 
-Be concise.
+Be concise and actionable.
 
 User: ${event.text}
 `);
@@ -260,11 +291,11 @@ User: ${event.text}
   }
 });
 
-// HEALTH
+// HEALTH CHECK
 app.get("/", (req, res) => {
-  res.send("Ben OpenAI version running 🚀");
+  res.send("🚀 Ben Level 3 running (money mode)");
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("🚀 Ben OpenAI LIVE");
+  console.log("🚀 Ben Level 3 LIVE");
 });
