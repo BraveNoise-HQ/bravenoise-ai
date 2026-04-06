@@ -43,8 +43,8 @@ const NICHE_COMBINATIONS = [
   "success driven lifestyle"
 ];
 
-// 🤖 OPENAI CALL
-async function askOpenAI(prompt) {
+// 🤖 GROQ API CALL
+async function askGroq(prompt) {
   try {
     const estimatedTokens = prompt.length / 4;
 
@@ -54,9 +54,9 @@ async function askOpenAI(prompt) {
     }
 
     const response = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
+      "https://api.groq.com/openai/v1/chat/completions",
       {
-        model: "gpt-4o-mini",
+        model: "llama-3.1-8b-instant", // Updated to a Groq model
         messages: [
           ...conversationHistory,
           { role: "user", content: prompt }
@@ -66,7 +66,7 @@ async function askOpenAI(prompt) {
       },
       {
         headers: {
-          Authorization: `Bearer ${OPENAI_API_KEY}`,
+          Authorization: `Bearer ${GROQ_API_KEY}`, // Swapped to use Groq API Key
           "Content-Type": "application/json"
         }
       }
@@ -84,7 +84,7 @@ async function askOpenAI(prompt) {
     return reply;
 
   } catch (err) {
-    console.error("OpenAI Error:", err.response?.data || err.message);
+    console.error("Groq Error:", err.response?.data || err.message);
     return null;
   }
 }
@@ -133,7 +133,7 @@ NICHE: ${niche}
 STYLE: ${designSpecs}
 `;
 
-  const raw = await askOpenAI(prompt);
+  const raw = await askGroq(prompt); // Updated function call
   const parsed = extractJSON(raw);
 
   if (!parsed || !parsed.title) {
@@ -269,7 +269,7 @@ app.post("/slack/events", async (req, res) => {
         return;
       }
 
-      const reply = await askOpenAI(`
+      const reply = await askGroq(` // Updated function call
 You are Ben, an AI business operator focused on Etsy growth.
 
 Be concise and actionable.
@@ -293,5 +293,5 @@ app.get("/", (req, res) => {
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("🚀 Ben Level 3 LIVE");
+  console.log("🚀 Ben Level 3 LIVE via Groq API");
 });
