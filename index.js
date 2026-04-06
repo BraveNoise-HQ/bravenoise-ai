@@ -42,7 +42,7 @@ async function askGroq(prompt, maxTokens = 500) {
     const response = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
       {
-        model: "llama-3.3-70b-versatile",
+        model: "llama-3.3-13b",
         messages: [
           ...conversationHistory,
           { role: "user", content: prompt }
