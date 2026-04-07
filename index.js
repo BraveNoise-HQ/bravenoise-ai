@@ -248,25 +248,22 @@ async function handleImageProduct(event) {
 
     const base64 = Buffer.from(res.data).toString("base64");
 
-    const text = event.text ? event.text.toLowerCase() : "custom design";
+    const text = event.text.toLowerCase();
     const product =
       text.includes("mug") ? "mug" :
       text.includes("hoodie") ? "hoodie" :
       text.includes("tote") ? "tote" : "t-shirt";
 
     const config = PRODUCT_MAP[product];
-    
-    // 🚀 FIXED: Generating SEO data based on the text you send with the image
-    const productData = await getProduct(text, product);
     const imageId = await upload(base64);
 
     await safeRequest(
       "POST",
       `https://api.printify.com/v1/shops/${PRINTIFY_SHOP_ID}/products.json`,
       {
-        title: productData.title, // 🚀 FIXED: Using dynamic AI title
-        description: productData.description, // 🚀 FIXED: Using dynamic AI description
-        tags: productData.tags, // 🚀 FIXED: Using dynamic AI tags
+        title: "Custom Upload",
+        description: "User uploaded design",
+        tags: ["custom"],
         blueprint_id: config.blueprint,
         print_provider_id: config.provider,
         variants: [{ id: 1, price: 2900, is_enabled: true }],
