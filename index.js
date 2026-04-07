@@ -57,7 +57,7 @@ async function retry(fn, retries = 2) {
   }
 }
 
-// 📢 SLACK (FIXED)
+// 📢 SLACK
 async function sendSlack(text, channel = "#general") {
   if (!SLACK_BOT_TOKEN) return;
 
@@ -347,29 +347,49 @@ async function handleImageProduct(event) {
   }
 }
 
-// 🔥 SLACK EVENTS (FIXED)
+// 🔥 SLACK EVENTS (FULL DEBUG)
 app.post("/slack/events", async (req, res) => {
+  const b = req.body;
+
+  // ✅ FULL PAYLOAD LOG
+  log("info", "Slack event FULL", {
+    body: JSON.stringify(b)
+  });
+
+  // ✅ URL VERIFICATION
+  if (b.type === "url_verification") {
+    return res.send(b.challenge);
+  }
+
+  // ✅ RETRY PROTECTION
   if (req.headers['x-slack-retry-num']) {
     return res.sendStatus(200);
   }
 
-  const b = req.body;
-
-  log("info", "Slack event received", {
-    text: b.event?.text,
-    hasFile: !!b.event?.files
-  });
+  // ✅ IGNORE BOT MESSAGES
+  if (b.event?.bot_id) return res.sendStatus(200);
 
   res.sendStatus(200);
 
-  if (b.event?.files) {
-    await handleImageProduct(b.event);
-    return;
+  const txt = (b.event?.text || "").toLowerCase();
+
+  log("info", "Parsed message", { txt });
+
+  if (
+    txt.includes("create") ||
+    txt.includes("post") ||
+    txt.includes("make") ||
+    txt.includes("run") ||
+    txt.includes("start")
+  ) {
+    log("info", "Trigger matched → creating product");
+    await createProduct(b.event.channel);
+  } else {
+    log("info", "No trigger matched");
   }
 
-  const txt = b.event?.text?.toLowerCase();
-  if (txt?.includes("create")) {
-    await createProduct(b.event.channel);
+  if (b.event?.files) {
+    await handleImageProduct(b.event);
   }
 });
 
