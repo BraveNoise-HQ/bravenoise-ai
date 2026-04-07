@@ -200,30 +200,68 @@ async function getNiche() {
   return "minimalist stoic quote";
 }
 
-// 🧾 PRODUCT DATA (UNCHANGED)
+// 🧾 PRODUCT DATA (🔥 FIXED + BULLETPROOF)
 async function getProduct(niche) {
-  const raw = await askGroq(`Create Etsy listing JSON for "${niche}"
-WARNING: Return ONLY raw JSON. No markdown formatting, no backticks, no introductory text. 
-Strict Format:
-{"title": "...","description": "...","tags": ["","","","","","","","","",""]}`, false);
-  
-  try {
-    if (!raw) throw new Error("Groq returned an empty response");
-    
-    const cleanText = raw.replace(/```json/g, '').replace(/```/g, '').trim();
-    const startIndex = cleanText.indexOf('{');
-    const endIndex = cleanText.lastIndexOf('}');
-    
-    if (startIndex === -1 || endIndex === -1) {
-      throw new Error("No JSON brackets found in output");
-    }
-    
-    const jsonString = cleanText.substring(startIndex, endIndex + 1);
-    return JSON.parse(jsonString);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const raw = await askGroq(
+        `Return ONLY valid JSON. No explanation.
 
-  } catch (err) {
-    log("error", "JSON Parse Failed", { rawOutput: raw, error: err.message });
-    throw new Error("Failed to read product data from AI.");
+Create Etsy listing for "${niche}"
+
+Format EXACTLY:
+{"title":"...","description":"...","tags":["tag1","tag2","tag3","tag4","tag5","tag6","tag7","tag8","tag9","tag10"]}`,
+        false
+      );
+
+      if (!raw) throw new Error("Empty response");
+
+      const cleanText = raw
+        .replace(/```json/g, '')
+        .replace(/```/g, '')
+        .replace(/\n/g, ' ')
+        .trim();
+
+      const start = cleanText.indexOf('{');
+      const end = cleanText.lastIndexOf('}');
+
+      if (start === -1 || end === -1) {
+        throw new Error("No JSON found");
+      }
+
+      let jsonString = cleanText.substring(start, end + 1);
+
+      jsonString = jsonString
+        .replace(/,\s*}/g, '}')
+        .replace(/,\s*]/g, ']');
+
+      const parsed = JSON.parse(jsonString);
+
+      if (!parsed.title || !parsed.description || !Array.isArray(parsed.tags)) {
+        throw new Error("Invalid JSON structure");
+      }
+
+      return parsed;
+
+    } catch (err) {
+      log("warn", "Product JSON retry", { attempt, error: err.message });
+
+      if (attempt === 3) {
+        log("error", "JSON Parse Failed FINAL", { niche });
+
+        return {
+          title: `${niche} T-Shirt`,
+          description: `Clean minimalist design inspired by ${niche}. Perfect for everyday wear.`,
+          tags: [
+            niche, "tshirt", "minimalist", "gift", "trend",
+            "design", "streetwear", "aesthetic", "fashion", "graphic tee"
+          ]
+        };
+      }
+      
+      // 💡 Take a 2-second breath before trying Groq again
+      await sleep(2000); 
+    }
   }
 }
 
@@ -456,6 +494,6 @@ process.on("uncaughtException", async (err) => {
 });
 
 // 🌐 SERVER
-app.get("/", (_, res) => res.send("Ben v4.8 running 🚀"));
+app.get("/", (_, res) => res.send("Ben v4.9 running 🚀"));
 
 app.listen(PORT, () => log("info", `Server running on ${PORT}`));
