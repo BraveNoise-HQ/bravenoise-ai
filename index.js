@@ -28,7 +28,7 @@ function log(level, message, meta = {}) {
   }));
 }
 
-// ⚠️ ENV VALIDATION (FIXED)
+// ⚠️ ENV VALIDATION
 if (!GROQ_API_KEY || !GEMINI_API_KEY || !PRINTIFY_API_TOKEN || !PRINTIFY_SHOP_ID || !FAL_KEY) {
   log("error", "Missing ENV variables");
 }
@@ -40,7 +40,7 @@ const BATCH_DELAY_MS = 5000;
 // 💤 Sleep
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// 🔁 RETRY HELPER (NEW)
+// 🔁 RETRY HELPER
 async function retry(fn, retries = 2) {
   for (let i = 0; i <= retries; i++) {
     try {
@@ -53,7 +53,7 @@ async function retry(fn, retries = 2) {
   }
 }
 
-// 📢 SLACK (FIXED RESPONSE CHECK)
+// 📢 SLACK
 async function sendSlack(text, channel = "#general") {
   if (!SLACK_BOT_TOKEN) return;
 
@@ -105,7 +105,7 @@ async function safeRequest(method, url, data = null, headers = {}, extraConfig =
   }
 }
 
-// 🧠 STATE & MEMORY (IMPROVED PERSISTENCE)
+// 🧠 STATE & MEMORY
 let chatHistory = [];
 let usedNiches = new Set();
 let stats = { created: 0 };
@@ -139,7 +139,7 @@ try {
   }
 } catch {}
 
-// 🤖 GROQ & PERSONALITY (UNCHANGED)
+// 🤖 GROQ & PERSONALITY
 const BEN_PERSONA = `You are Ben, a warm, approachable, and enthusiastic AI business operator. Your goal is to manage and automate an Etsy Print-on-Demand business. 
 You know your human partner is a talented professional photographer, graphic designer, and video editor. Your job is to handle the heavy lifting—market research, SEO, bulk AI design generation, and Printify uploads—so they can review and approve your drafts. 
 Be supportive, knowledgeable, and friendly, but keep your responses concise and actionable.`;
@@ -183,12 +183,15 @@ async function askGroq(prompt, isChat = false) {
   }
 }
 
-// 🎯 NICHE (FIXED NORMALIZATION + SAVE)
+// 🎯 NICHE (Hardened against undefined responses)
 const normalize = (s) => s.toLowerCase().trim();
 
 async function getNiche() {
   for (let i = 0; i < 5; i++) {
-    const n = (await askGroq("Give ONE profitable t-shirt niche.", false))?.trim();
+    const rawNiche = await askGroq("Give ONE profitable t-shirt niche.", false);
+    if (!rawNiche) continue; // Skip if Groq failed to respond
+
+    const n = rawNiche.trim();
     const key = normalize(n);
 
     if (n && !usedNiches.has(key)) {
@@ -200,7 +203,7 @@ async function getNiche() {
   return "minimalist stoic quote";
 }
 
-// 🧾 PRODUCT DATA (🔥 FIXED + BULLETPROOF)
+// 🧾 PRODUCT DATA 
 async function getProduct(niche) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -259,7 +262,7 @@ Format EXACTLY:
         };
       }
       
-      // 💡 Take a 2-second breath before trying Groq again
+      // Take a 2-second breath before trying Groq again
       await sleep(2000); 
     }
   }
@@ -312,7 +315,7 @@ async function fal(prompt) {
   return Buffer.from(img).toString("base64");
 }
 
-// 🖼️ PLACEHOLDER (UNCHANGED - YOUR STRATEGY KEPT)
+// 🖼️ PLACEHOLDER (Pop Culture Database)
 async function placeholder(niche) {
   const quotes = [
     "It's a trap!", "Affirmative.", "Game over, man!", "Do a barrel roll!", 
@@ -327,7 +330,7 @@ async function placeholder(niche) {
   return Buffer.from(img).toString("base64");
 }
 
-// 🧠 IMAGE ROUTER (WITH RETRY)
+// 🧠 IMAGE ROUTER
 async function generateImage(prompt, niche) {
   try {
     log("info", "Gemini start");
@@ -343,7 +346,7 @@ async function generateImage(prompt, niche) {
   }
 }
 
-// 📤 UPLOAD (WITH RETRY)
+// 📤 UPLOAD
 async function upload(image, niche) {
   return await retry(async () => {
     const res = await safeRequest(
@@ -359,7 +362,7 @@ async function upload(image, niche) {
   });
 }
 
-// 🛒 PRODUCT CREATOR (IMPROVED VARIANT SELECTION)
+// 🛒 PRODUCT CREATOR
 async function createProduct(channel = "#general") {
   try {
     await sendSlack("🚀 Starting product workflow...", channel);
@@ -378,11 +381,14 @@ async function createProduct(channel = "#general") {
       headers
     );
 
-    const variant = catalog.variants.find(v => 
-      v.is_enabled && v.title.includes("Black") && v.title.includes("M")
-    ) || catalog.variants.find(v => v.is_enabled);
+    const variants = catalog.variants || [];
+    
+    // 🔥 FIXED: Removed is_enabled as it doesn't exist in Printify's catalog API
+    const variant = variants.find(v => 
+      v.title && v.title.includes("Black") && v.title.includes("M")
+    ) || variants[0];
 
-    if (!variant) throw new Error("No variant");
+    if (!variant) throw new Error("No valid variant found in Printify catalog.");
 
     for (let i = 1; i <= 3; i++) {
       log("info", "Creating design", { i });
@@ -404,7 +410,7 @@ async function createProduct(channel = "#general") {
           blueprint_id: 12,
           print_provider_id: 29,
           visible: false,
-          variants: [{ id: variant.id, price: 2900, is_enabled: true }],
+          variants: [{ id: variant.id, price: 2900, is_enabled: true }], // is_enabled goes here, not in the search!
           print_areas: [{
             variant_ids: [variant.id],
             placeholders: [{
@@ -413,7 +419,7 @@ async function createProduct(channel = "#general") {
                 id: imageId,
                 x: 0.5,
                 y: 0.5,
-                scale: 0.6,
+                scale: 0.6, // Perfect 60% chest scale!
                 angle: 0
               }]
             }]
@@ -456,7 +462,7 @@ setInterval(() => {
   stats = { created: 0 };
 }, 1000 * 60 * 60 * 24);
 
-// 🔥 SLACK EVENTS (UNCHANGED)
+// 🔥 SLACK EVENTS
 app.post("/slack/events", async (req, res) => {
   const b = req.body;
   if (b.type === "url_verification") return res.send(b.challenge);
@@ -482,7 +488,7 @@ app.post("/slack/events", async (req, res) => {
   }
 });
 
-// 🔥 GLOBAL ERROR HANDLERS (UNCHANGED)
+// 🔥 GLOBAL ERROR HANDLERS
 process.on("unhandledRejection", async (err) => {
   log("error", "Unhandled rejection", { error: err.message });
   await sendSlack(`💥 UNHANDLED ERROR\n${err.message}`);
@@ -494,6 +500,6 @@ process.on("uncaughtException", async (err) => {
 });
 
 // 🌐 SERVER
-app.get("/", (_, res) => res.send("Ben v4.9 running 🚀"));
+app.get("/", (_, res) => res.send("Ben v4.9.1 running 🚀"));
 
 app.listen(PORT, () => log("info", `Server running on ${PORT}`));
