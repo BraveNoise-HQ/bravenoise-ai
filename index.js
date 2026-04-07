@@ -1,4 +1,3 @@
-
 import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
@@ -42,9 +41,7 @@ const PRODUCT_MAP = {
   "tote": { blueprint: 5, provider: 29 }
 };
 
-// ⏱️ DELAYS
-const IMAGE_DELAY_MS = 10000;
-const BATCH_DELAY_MS = 5000;
+// ⏱️ UTILS
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // 🔁 RETRY
@@ -54,22 +51,27 @@ async function retry(fn, retries = 2) {
       return await fn();
     } catch (err) {
       if (i === retries) throw err;
-      log("warn", "Retrying...", { attempt: i + 1 });
+      log("warn", "Retrying...", { attempt: i + 1, error: err.message });
       await sleep(2000);
     }
   }
 }
 
-// 📢 SLACK
+// 📢 SLACK (FIXED)
 async function sendSlack(text, channel = "#general") {
   if (!SLACK_BOT_TOKEN) return;
 
   try {
-    await axios.post(
+    const res = await axios.post(
       "https://slack.com/api/chat.postMessage",
       { channel, text },
       { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } }
     );
+
+    if (!res.data.ok) {
+      log("error", "Slack API error", { response: res.data });
+    }
+
   } catch (err) {
     log("error", "Slack send failed", { error: err.message });
   }
@@ -88,12 +90,14 @@ async function safeRequest(method, url, data = null, headers = {}, extraConfig =
     });
     return res.data;
   } catch (err) {
+    log("error", "API Error", {
+      url,
+      status: err.response?.status,
+      data: err.response?.data
+    });
     throw new Error(err.response?.status || "Network error");
   }
 }
-
-// 🧠 MEMORY
-let usedNiches = new Set();
 
 // 🤖 GROQ
 async function askGroq(prompt) {
@@ -108,7 +112,8 @@ async function askGroq(prompt) {
       { Authorization: `Bearer ${GROQ_API_KEY}` }
     );
     return res.choices?.[0]?.message?.content || "";
-  } catch {
+  } catch (err) {
+    log("error", "Groq failed", { error: err.message });
     return null;
   }
 }
@@ -125,30 +130,37 @@ niche: ...
 
   try {
     const lines = res.split("\n");
-    return {
+    const result = {
       product: lines[0].split(":")[1].trim().toLowerCase(),
       niche: lines[1].split(":")[1].trim()
     };
+    log("info", "Trending selected", result);
+    return result;
   } catch {
+    log("warn", "Fallback niche used");
     return { product: "t-shirt", niche: "minimalist stoic quote" };
   }
 }
 
-// 🧾 SEO PRODUCT
+// 🧾 PRODUCT
 async function getProduct(niche, productType) {
   try {
     const raw = await askGroq(`
-Create a HIGH-CONVERTING Etsy listing.
-
-Product: ${productType}
-Niche: ${niche}
-
-Return JSON with:
-title, description, 13 tags
+Return ONLY JSON:
+{"title":"...","description":"...","tags":["","","","","","","","","","","","",""]}
 `);
 
-    return JSON.parse(raw);
-  } catch {
+    if (!raw) throw new Error("Empty");
+
+    const clean = raw.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean.substring(clean.indexOf('{'), clean.lastIndexOf('}') + 1));
+
+    if (!parsed.tags || parsed.tags.length !== 13) throw new Error("Bad tags");
+
+    return parsed;
+
+  } catch (err) {
+    log("warn", "Fallback product used", { error: err.message });
     return {
       title: `${niche} ${productType}`,
       description: `Premium ${productType} with ${niche} design.`,
@@ -160,34 +172,48 @@ title, description, 13 tags
 // 🎨 PROMPT
 async function getPrompt(niche) {
   return `
-Huge bold typography t-shirt design.
-Text fills entire canvas.
-Centered chest layout.
-No small text.
+Bold typography design.
+Large centered text filling 80-90% of canvas.
+Use thick font (Montserrat ExtraBold / Bebas Neue / Anton style).
+NO small text.
+NO category labels.
 Theme: ${niche}
 `;
 }
 
-// 🖼️ IMAGE (simplified)
+// 🖼️ IMAGE
 async function generateImage(prompt) {
   return await retry(async () => {
+    log("info", "Generating image");
+
     const res = await safeRequest(
       "POST",
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${GEMINI_API_KEY}`,
       { contents: [{ parts: [{ text: prompt }] }] }
     );
-    return res.candidates[0].content.parts[0].inlineData.data;
+
+    const parts = res?.candidates?.[0]?.content?.parts || [];
+    const img = parts.find(p => p.inlineData);
+
+    if (!img?.inlineData?.data) throw new Error("No image");
+
+    log("info", "Image generated");
+    return img.inlineData.data;
   });
 }
 
 // 📤 UPLOAD
 async function upload(image) {
+  log("info", "Uploading image");
+
   const res = await safeRequest(
     "POST",
     "https://api.printify.com/v1/uploads/images.json",
     { file_name: `design_${Date.now()}.png`, contents: image },
     { Authorization: `Bearer ${PRINTIFY_API_TOKEN}` }
   );
+
+  log("info", "Upload success", { imageId: res.id });
   return res.id;
 }
 
@@ -195,7 +221,19 @@ async function upload(image) {
 async function createProduct(channel = "#general") {
   try {
     const { product, niche } = await getTrendingProduct();
-    const config = PRODUCT_MAP[product];
+    const config = PRODUCT_MAP[product] || PRODUCT_MAP["t-shirt"];
+
+    log("info", "Creating product", { product, niche });
+
+    const catalog = await safeRequest(
+      "GET",
+      `https://api.printify.com/v1/catalog/blueprints/${config.blueprint}/print_providers/${config.provider}/variants.json`,
+      null,
+      { Authorization: `Bearer ${PRINTIFY_API_TOKEN}` }
+    );
+
+    const variant = catalog.variants?.[0];
+    if (!variant) throw new Error("No variant found");
 
     const productData = await getProduct(niche, product);
     const prompt = await getPrompt(niche);
@@ -211,9 +249,9 @@ async function createProduct(channel = "#general") {
         tags: productData.tags,
         blueprint_id: config.blueprint,
         print_provider_id: config.provider,
-        variants: [{ id: 1, price: 2900, is_enabled: true }],
+        variants: [{ id: variant.id, price: 2900, is_enabled: true }],
         print_areas: [{
-          variant_ids: [1],
+          variant_ids: [variant.id],
           placeholders: [{
             position: "front",
             images: [{
@@ -229,9 +267,11 @@ async function createProduct(channel = "#general") {
       { Authorization: `Bearer ${PRINTIFY_API_TOKEN}` }
     );
 
+    log("info", "Product created successfully");
     await sendSlack(`🔥 ${product} created | ${niche}`, channel);
 
   } catch (err) {
+    log("error", "Create product failed", { error: err.message });
     await sendSlack(`❌ Error: ${err.message}`);
   }
 }
@@ -239,6 +279,8 @@ async function createProduct(channel = "#general") {
 // 📩 SLACK IMAGE → PRODUCT
 async function handleImageProduct(event) {
   try {
+    log("info", "Handling image upload");
+
     const file = event.files?.[0];
     if (!file) return;
 
@@ -249,13 +291,24 @@ async function handleImageProduct(event) {
 
     const base64 = Buffer.from(res.data).toString("base64");
 
-    const text = event.text.toLowerCase();
+    const text = (event.text || "").toLowerCase();
     const product =
       text.includes("mug") ? "mug" :
       text.includes("hoodie") ? "hoodie" :
       text.includes("tote") ? "tote" : "t-shirt";
 
-    const config = PRODUCT_MAP[product];
+    const config = PRODUCT_MAP[product] || PRODUCT_MAP["t-shirt"];
+
+    const catalog = await safeRequest(
+      "GET",
+      `https://api.printify.com/v1/catalog/blueprints/${config.blueprint}/print_providers/${config.provider}/variants.json`,
+      null,
+      { Authorization: `Bearer ${PRINTIFY_API_TOKEN}` }
+    );
+
+    const variant = catalog.variants?.[0];
+    if (!variant) throw new Error("No variant");
+
     const imageId = await upload(base64);
 
     await safeRequest(
@@ -267,9 +320,9 @@ async function handleImageProduct(event) {
         tags: ["custom"],
         blueprint_id: config.blueprint,
         print_provider_id: config.provider,
-        variants: [{ id: 1, price: 2900, is_enabled: true }],
+        variants: [{ id: variant.id, price: 2900, is_enabled: true }],
         print_areas: [{
-          variant_ids: [1],
+          variant_ids: [variant.id],
           placeholders: [{
             position: "front",
             images: [{
@@ -285,15 +338,28 @@ async function handleImageProduct(event) {
       { Authorization: `Bearer ${PRINTIFY_API_TOKEN}` }
     );
 
+    log("info", "Custom product created");
     await sendSlack(`✅ Custom ${product} created`);
+
   } catch (err) {
+    log("error", "Upload flow failed", { error: err.message });
     await sendSlack(`❌ Upload failed`);
   }
 }
 
-// 🔥 SLACK EVENTS
+// 🔥 SLACK EVENTS (FIXED)
 app.post("/slack/events", async (req, res) => {
+  if (req.headers['x-slack-retry-num']) {
+    return res.sendStatus(200);
+  }
+
   const b = req.body;
+
+  log("info", "Slack event received", {
+    text: b.event?.text,
+    hasFile: !!b.event?.files
+  });
+
   res.sendStatus(200);
 
   if (b.event?.files) {
