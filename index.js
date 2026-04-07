@@ -183,13 +183,13 @@ async function askGroq(prompt, isChat = false) {
   }
 }
 
-// 🎯 NICHE (Hardened against undefined responses)
+// 🎯 NICHE
 const normalize = (s) => s.toLowerCase().trim();
 
 async function getNiche() {
   for (let i = 0; i < 5; i++) {
     const rawNiche = await askGroq("Give ONE profitable t-shirt niche.", false);
-    if (!rawNiche) continue; // Skip if Groq failed to respond
+    if (!rawNiche) continue;
 
     const n = rawNiche.trim();
     const key = normalize(n);
@@ -262,15 +262,31 @@ Format EXACTLY:
         };
       }
       
-      // Take a 2-second breath before trying Groq again
       await sleep(2000); 
     }
   }
 }
 
-// 🎨 PROMPT
+// 🎨 PROMPT (🔥 FIXED)
 async function getPrompt(niche, v) {
-  return await askGroq(`T-shirt design for ${niche}, variation ${v}, ${designSpecs}`, false);
+  return await askGroq(
+`Create a bold, minimal t-shirt graphic.
+
+RULES:
+- ONLY the quote text (no extra words like "gaming t-shirt")
+- Large, centered chest placement
+- Text must be BIG, readable, and dominant
+- Use bold typography (Montserrat ExtraBold or graffiti style)
+- Clean spacing, no clutter
+- White or transparent background
+- High contrast
+
+Design theme: ${niche}
+Variation: ${v}
+
+Output: A clean graphic design description for image generation.`,
+false
+  );
 }
 
 // 🖼️ GEMINI
@@ -315,7 +331,7 @@ async function fal(prompt) {
   return Buffer.from(img).toString("base64");
 }
 
-// 🖼️ PLACEHOLDER (Pop Culture Database)
+// 🖼️ PLACEHOLDER
 async function placeholder(niche) {
   const quotes = [
     "It's a trap!", "Affirmative.", "Game over, man!", "Do a barrel roll!", 
@@ -383,7 +399,6 @@ async function createProduct(channel = "#general") {
 
     const variants = catalog.variants || [];
     
-    // 🔥 FIXED: Removed is_enabled as it doesn't exist in Printify's catalog API
     const variant = variants.find(v => 
       v.title && v.title.includes("Black") && v.title.includes("M")
     ) || variants[0];
@@ -410,7 +425,7 @@ async function createProduct(channel = "#general") {
           blueprint_id: 12,
           print_provider_id: 29,
           visible: false,
-          variants: [{ id: variant.id, price: 2900, is_enabled: true }], // is_enabled goes here, not in the search!
+          variants: [{ id: variant.id, price: 2900, is_enabled: true }],
           print_areas: [{
             variant_ids: [variant.id],
             placeholders: [{
@@ -419,7 +434,7 @@ async function createProduct(channel = "#general") {
                 id: imageId,
                 x: 0.5,
                 y: 0.5,
-                scale: 0.6, // Perfect 60% chest scale!
+                scale: 0.85, // 🔥 FIXED: Bigger chest placement
                 angle: 0
               }]
             }]
@@ -441,7 +456,7 @@ async function createProduct(channel = "#general") {
   }
 }
 
-// 🔁 AUTO RUN (PROTECTED)
+// 🔁 AUTO RUN
 let isRunning = false;
 
 setInterval(async () => {
@@ -500,6 +515,6 @@ process.on("uncaughtException", async (err) => {
 });
 
 // 🌐 SERVER
-app.get("/", (_, res) => res.send("Ben v4.9.1 running 🚀"));
+app.get("/", (_, res) => res.send("Ben v4.9.2 running 🚀"));
 
 app.listen(PORT, () => log("info", `Server running on ${PORT}`));
