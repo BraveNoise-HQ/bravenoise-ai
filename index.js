@@ -212,7 +212,7 @@ async function fal(prompt) {
   return Buffer.from(img).toString("base64");
 }
 
-// 🖼️ PLACEHOLDER (Restored Quotes)
+// 🖼️ PLACEHOLDER (Restored Pop Culture Quotes)
 async function placeholder(niche) {
   const quotes = [
     "It's a trap!", "Affirmative.", "Game over, man!", "Do a barrel roll!", 
@@ -309,7 +309,7 @@ async function createProduct(channel = "#general") {
                 id: imageId,
                 x: 0.5,
                 y: 0.5,
-                scale: 0.7,
+                scale: 0.6, // Perfect 60% chest scale!
                 angle: 0
               }]
             }]
@@ -343,7 +343,7 @@ setInterval(() => {
   stats = { created: 0 };
 }, 1000 * 60 * 60 * 24);
 
-// 🔥 SLACK EVENTS (Restored listener for chat and commands)
+// 🔥 SLACK EVENTS
 app.post("/slack/events", async (req, res) => {
   const b = req.body;
   if (b.type === "url_verification") return res.send(b.challenge);
@@ -381,6 +381,6 @@ process.on("uncaughtException", async (err) => {
 });
 
 // 🌐 SERVER
-app.get("/", (_, res) => res.send("Ben v4.5.1 running 🚀"));
+app.get("/", (_, res) => res.send("Ben v4.6 running 🚀"));
 
 app.listen(PORT, () => log("info", `Server running on ${PORT}`));
