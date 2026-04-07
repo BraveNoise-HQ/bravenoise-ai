@@ -18,7 +18,7 @@ const {
   PRINTIFY_SHOP_ID
 } = process.env;
 
-// 🧾 LOGGER (STRUCTURED)
+// 🧾 LOGGER
 function log(level, message, meta = {}) {
   console.log(JSON.stringify({
     time: new Date().toISOString(),
@@ -33,14 +33,19 @@ if (!GROQ_API_KEY || !GEMINI_API_KEY || !PRINTIFY_API_TOKEN || !PRINTIFY_SHOP_ID
   log("error", "Missing ENV variables");
 }
 
+// 🛒 PRODUCT MAP (With default target colors/sizes)
+const PRODUCT_MAP = {
+  "t-shirt": { blueprint: 12, provider: 29, color: "Black", size: "M" },
+  "hoodie": { blueprint: 77, provider: 29, color: "Black", size: "L" },
+  "mug": { blueprint: 9, provider: 29, color: "White", size: "11oz" },
+  "tote": { blueprint: 5, provider: 29, color: "Natural", size: "OS" }
+};
+
 // ⏱️ DELAYS
 const IMAGE_DELAY_MS = 10000;
-const BATCH_DELAY_MS = 5000;
-
-// 💤 Sleep
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// 🔁 RETRY HELPER
+// 🔁 RETRY
 async function retry(fn, retries = 2) {
   for (let i = 0; i <= retries; i++) {
     try {
@@ -56,18 +61,12 @@ async function retry(fn, retries = 2) {
 // 📢 SLACK
 async function sendSlack(text, channel = "#general") {
   if (!SLACK_BOT_TOKEN) return;
-
   try {
-    const res = await axios.post(
+    await axios.post(
       "https://slack.com/api/chat.postMessage",
       { channel, text },
       { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } }
     );
-
-    if (!res.data.ok) {
-      log("error", "Slack API error", { response: res.data });
-    }
-
   } catch (err) {
     log("error", "Slack send failed", { error: err.message });
   }
@@ -86,435 +85,240 @@ async function safeRequest(method, url, data = null, headers = {}, extraConfig =
     });
     return res.data;
   } catch (err) {
-    if (err.response) {
-      log("error", "API Error", {
-        url,
-        status: err.response.status,
-        data: err.response.data
-      });
-
-      if (err.response.status >= 500) {
-        await sendSlack(`🚨 API DOWN\n${url}\nStatus: ${err.response.status}`);
-      }
-
-      throw new Error(`HTTP ${err.response.status}`);
-    } else {
-      log("error", "Network Error", { url, error: err.message });
-      throw new Error("Network error");
-    }
+    throw new Error(err.response?.status || "Network error");
   }
 }
 
-// 🧠 STATE & MEMORY
-let chatHistory = [];
-let usedNiches = new Set();
-let stats = { created: 0 };
-
-const NICHE_FILE = "./niches.json";
-
-// Load niches
-try {
-  if (fs.existsSync(NICHE_FILE)) {
-    const saved = JSON.parse(fs.readFileSync(NICHE_FILE, "utf8"));
-    usedNiches = new Set(saved);
-  }
-} catch (err) {
-  log("warn", "Failed loading niches", { error: err.message });
-}
-
-// Save niches
-function saveNiches() {
+// 🤖 GROQ
+async function askGroq(prompt) {
   try {
-    fs.writeFileSync(NICHE_FILE, JSON.stringify([...usedNiches]));
-  } catch (err) {
-    log("warn", "Failed saving niches", { error: err.message });
-  }
-}
-
-// 🎨 DESIGN STYLE
-let designSpecs = "Minimalist, bold typography, clean layout, flat vector, white background.";
-try {
-  if (fs.existsSync("./DESIGN.md")) {
-    designSpecs = fs.readFileSync("./DESIGN.md", "utf8");
-  }
-} catch {}
-
-// 🤖 GROQ & PERSONALITY
-const BEN_PERSONA = `You are Ben, a warm, approachable, and enthusiastic AI business operator. Your goal is to manage and automate an Etsy Print-on-Demand business. 
-You know your human partner is a talented professional photographer, graphic designer, and video editor. Your job is to handle the heavy lifting—market research, SEO, bulk AI design generation, and Printify uploads—so they can review and approve your drafts. 
-Be supportive, knowledgeable, and friendly, but keep your responses concise and actionable.`;
-
-// 🤖 GROQ CALL
-async function askGroq(prompt, isChat = false) {
-  try {
-    const messages = [];
-    
-    if (isChat) {
-      messages.push({ role: "system", content: BEN_PERSONA });
-      messages.push(...chatHistory);
-    } else {
-      messages.push({ role: "system", content: "You are an expert backend processor. Output strictly what is requested." });
-    }
-    
-    messages.push({ role: "user", content: prompt });
-
     const res = await safeRequest(
       "POST",
       "https://api.groq.com/openai/v1/chat/completions",
       {
         model: "llama-3.3-70b-versatile",
-        messages: messages
+        messages: [{ role: "user", content: prompt }]
       },
       { Authorization: `Bearer ${GROQ_API_KEY}` }
     );
-
-    const reply = res.choices?.[0]?.message?.content || "";
-
-    if (isChat) {
-      chatHistory.push({ role: "user", content: prompt });
-      chatHistory.push({ role: "assistant", content: reply });
-      if (chatHistory.length > 8) chatHistory = chatHistory.slice(-8); 
-    }
-
-    return reply;
-  } catch (err) {
-    log("error", "Groq failed", { error: err.message });
+    return res.choices?.[0]?.message?.content || "";
+  } catch {
     return null;
   }
 }
 
-// 🎯 NICHE
-const normalize = (s) => s.toLowerCase().trim();
+// 🔍 TRENDING PRODUCT
+async function getTrendingProduct() {
+  const res = await askGroq(`
+Give ONE trending Etsy print-on-demand product and niche.
+Format exactly like this (no extra text):
+product: hoodie
+niche: stoic quote
+`);
 
-async function getNiche() {
-  for (let i = 0; i < 5; i++) {
-    const rawNiche = await askGroq("Give ONE profitable t-shirt niche.", false);
-    if (!rawNiche) continue;
-
-    const n = rawNiche.trim();
-    const key = normalize(n);
-
-    if (n && !usedNiches.has(key)) {
-      usedNiches.add(key);
-      saveNiches();
-      return n;
-    }
-  }
-  return "minimalist stoic quote";
-}
-
-// 🧾 PRODUCT DATA 
-async function getProduct(niche) {
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const raw = await askGroq(
-        `Return ONLY valid JSON. No explanation.
-
-Create Etsy listing for "${niche}"
-
-Format EXACTLY:
-{"title":"...","description":"...","tags":["tag1","tag2","tag3","tag4","tag5","tag6","tag7","tag8","tag9","tag10"]}`,
-        false
-      );
-
-      if (!raw) throw new Error("Empty response");
-
-      const cleanText = raw
-        .replace(/```json/g, '')
-        .replace(/```/g, '')
-        .replace(/\n/g, ' ')
-        .trim();
-
-      const start = cleanText.indexOf('{');
-      const end = cleanText.lastIndexOf('}');
-
-      if (start === -1 || end === -1) {
-        throw new Error("No JSON found");
-      }
-
-      let jsonString = cleanText.substring(start, end + 1);
-
-      jsonString = jsonString
-        .replace(/,\s*}/g, '}')
-        .replace(/,\s*]/g, ']');
-
-      const parsed = JSON.parse(jsonString);
-
-      if (!parsed.title || !parsed.description || !Array.isArray(parsed.tags)) {
-        throw new Error("Invalid JSON structure");
-      }
-
-      return parsed;
-
-    } catch (err) {
-      log("warn", "Product JSON retry", { attempt, error: err.message });
-
-      if (attempt === 3) {
-        log("error", "JSON Parse Failed FINAL", { niche });
-
-        return {
-          title: `${niche} T-Shirt`,
-          description: `Clean minimalist design inspired by ${niche}. Perfect for everyday wear.`,
-          tags: [
-            niche, "tshirt", "minimalist", "gift", "trend",
-            "design", "streetwear", "aesthetic", "fashion", "graphic tee"
-          ]
-        };
-      }
-      
-      await sleep(2000); 
-    }
-  }
-}
-
-// 🎨 PROMPT (🔥 FIXED)
-async function getPrompt(niche, v) {
-  return await askGroq(
-`Create a bold, minimal t-shirt graphic.
-
-RULES:
-- ONLY the quote text (no extra words like "gaming t-shirt")
-- Large, centered chest placement
-- Text must be BIG, readable, and dominant
-- Use bold typography (Montserrat ExtraBold or graffiti style)
-- Clean spacing, no clutter
-- White or transparent background
-- High contrast
-
-Design theme: ${niche}
-Variation: ${v}
-
-Output: A clean graphic design description for image generation.`,
-false
-  );
-}
-
-// 🖼️ GEMINI
-async function gemini(prompt) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${GEMINI_API_KEY}`;
-
-  const res = await safeRequest("POST", url, {
-    contents: [{ parts: [{ text: prompt }] }]
-  });
-
-  const parts = res?.candidates?.[0]?.content?.parts || [];
-  const part = parts.find(p => p.inlineData);
-
-  if (!part?.inlineData?.data) {
-    throw new Error("No image from Gemini");
-  }
-
-  return part.inlineData.data;
-}
-
-// 🖼️ FAL
-async function fal(prompt) {
-  const res = await safeRequest(
-    "POST",
-    "https://fal.run/fal-ai/flux/schnell",
-    { prompt, image_size: "square_hd" },
-    { Authorization: `Key ${FAL_KEY}` }
-  );
-
-  if (!res?.images?.length) {
-    throw new Error("FAL returned no images");
-  }
-
-  const img = await safeRequest(
-    "GET",
-    res.images[0].url,
-    null,
-    {},
-    { responseType: "arraybuffer" }
-  );
-
-  return Buffer.from(img).toString("base64");
-}
-
-// 🖼️ PLACEHOLDER
-async function placeholder(niche) {
-  const quotes = [
-    "It's a trap!", "Affirmative.", "Game over, man!", "Do a barrel roll!", 
-    "Stay frosty.", "Finish him!", "Why so serious?", "You shall not pass!", 
-    "Praise the sun!", "Wasted.", "I know what you did.", "I'll be back."
-  ];
-  const randomQuote = quotes[Math.floor(Math.random() * quotes.length)];
-  const safeText = encodeURIComponent(`${niche.toUpperCase()} - "${randomQuote.toUpperCase()}"`);
-  
-  const url = `https://dummyimage.com/1024x1024/ffffff/000000.png&text=${safeText}`;
-  const img = await safeRequest("GET", url, null, {}, { responseType: "arraybuffer" });
-  return Buffer.from(img).toString("base64");
-}
-
-// 🧠 IMAGE ROUTER
-async function generateImage(prompt, niche) {
   try {
-    log("info", "Gemini start");
-    return await retry(() => gemini(prompt));
+    const lines = res.split("\n").filter(l => l.includes(":"));
+    return {
+      product: lines[0].split(":")[1].trim().toLowerCase(),
+      niche: lines[1].split(":")[1].trim()
+    };
   } catch {
-    try {
-      log("warn", "FAL fallback");
-      return await retry(() => fal(prompt));
-    } catch {
-      log("warn", "Placeholder fallback");
-      return await placeholder(niche);
-    }
+    return { product: "t-shirt", niche: "minimalist stoic quote" };
   }
 }
 
-// 📤 UPLOAD
-async function upload(image, niche) {
+// 🧾 SEO PRODUCT
+async function getProduct(niche, productType) {
+  try {
+    const raw = await askGroq(`
+Create a HIGH-CONVERTING Etsy listing.
+Product: ${productType}
+Niche: ${niche}
+Return ONLY valid JSON with no markdown:
+{"title": "...", "description": "...", "tags": ["tag1", "tag2", "tag3", "tag4", "tag5", "tag6", "tag7", "tag8", "tag9", "tag10", "tag11", "tag12", "tag13"]}
+`);
+    const cleanText = raw.replace(/```json/g, '').replace(/```/g, '').trim();
+    return JSON.parse(cleanText);
+  } catch {
+    return {
+      title: `${niche} ${productType}`,
+      description: `Premium ${productType} with a custom ${niche} design.`,
+      tags: [niche, productType, "custom design", "apparel", "gift", "trending", "graphic", "minimalist", "style", "fashion", "unique", "art", "cool"]
+    };
+  }
+}
+
+// 🎨 PROMPT
+async function getPrompt(niche) {
+  return `Huge bold typography t-shirt design. Text fills entire canvas. Centered chest layout. No small text. Theme: ${niche}. Pure white background.`;
+}
+
+// 🖼️ IMAGE (Gemini Only)
+async function generateImage(prompt) {
   return await retry(async () => {
     const res = await safeRequest(
       "POST",
-      "https://api.printify.com/v1/uploads/images.json",
-      {
-        file_name: `${niche.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${Date.now()}.png`,
-        contents: image
-      },
-      { Authorization: `Bearer ${PRINTIFY_API_TOKEN}` }
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${GEMINI_API_KEY}`,
+      { contents: [{ parts: [{ text: prompt }] }] }
     );
-    return res.id;
+    return res.candidates[0].content.parts[0].inlineData.data;
   });
 }
 
-// 🛒 PRODUCT CREATOR
+// 📤 UPLOAD
+async function upload(image) {
+  const res = await safeRequest(
+    "POST",
+    "https://api.printify.com/v1/uploads/images.json",
+    { file_name: `design_${Date.now()}.png`, contents: image },
+    { Authorization: `Bearer ${PRINTIFY_API_TOKEN}` }
+  );
+  return res.id;
+}
+
+// 🛠️ GET VARIANT HELPER (Restored so Printify doesn't crash)
+async function getVariantId(blueprint, provider, targetColor, targetSize) {
+  const headers = { Authorization: `Bearer ${PRINTIFY_API_TOKEN}` };
+  const catalog = await safeRequest(
+    "GET",
+    `https://api.printify.com/v1/catalog/blueprints/${blueprint}/print_providers/${provider}/variants.json`,
+    null,
+    headers
+  );
+  const variants = catalog.variants || [];
+  const variant = variants.find(v => v.title && v.title.includes(targetColor) && v.title.includes(targetSize)) || variants[0];
+  if (!variant) throw new Error("No variants found in catalog.");
+  return variant.id;
+}
+
+// 🛒 CREATE PRODUCT (Auto-Generated)
 async function createProduct(channel = "#general") {
   try {
-    await sendSlack("🚀 Starting product workflow...", channel);
+    const { product, niche } = await getTrendingProduct();
+    const config = PRODUCT_MAP[product] || PRODUCT_MAP["t-shirt"];
 
-    const niche = await getNiche();
-    log("info", "Niche selected", { niche });
+    await sendSlack(`⏳ Researching ${product} in the "${niche}" niche...`, channel);
 
-    const product = await getProduct(niche);
+    const productData = await getProduct(niche, product);
+    const prompt = await getPrompt(niche);
+    const image = await generateImage(prompt);
+    
+    await sleep(IMAGE_DELAY_MS);
+    const imageId = await upload(image);
+    
+    // Grab the real variant ID!
+    const variantId = await getVariantId(config.blueprint, config.provider, config.color, config.size);
 
-    const headers = { Authorization: `Bearer ${PRINTIFY_API_TOKEN}` };
-
-    const catalog = await safeRequest(
-      "GET",
-      "https://api.printify.com/v1/catalog/blueprints/12/print_providers/29/variants.json",
-      null,
-      headers
+    await safeRequest(
+      "POST",
+      `https://api.printify.com/v1/shops/${PRINTIFY_SHOP_ID}/products.json`,
+      {
+        title: productData.title,
+        description: productData.description,
+        tags: productData.tags,
+        blueprint_id: config.blueprint,
+        print_provider_id: config.provider,
+        visible: false,
+        variants: [{ id: variantId, price: 2900, is_enabled: true }], // Fixed!
+        print_areas: [{
+          variant_ids: [variantId], // Fixed!
+          placeholders: [{
+            position: "front",
+            images: [{ id: imageId, x: 0.5, y: 0.5, scale: 0.85, angle: 0 }]
+          }]
+        }]
+      },
+      { Authorization: `Bearer ${PRINTIFY_API_TOKEN}` }
     );
 
-    const variants = catalog.variants || [];
-    
-    const variant = variants.find(v => 
-      v.title && v.title.includes("Black") && v.title.includes("M")
-    ) || variants[0];
-
-    if (!variant) throw new Error("No valid variant found in Printify catalog.");
-
-    for (let i = 1; i <= 3; i++) {
-      log("info", "Creating design", { i });
-
-      const prompt = await getPrompt(niche, i);
-      const image = await generateImage(prompt, niche);
-
-      await sleep(IMAGE_DELAY_MS);
-
-      const imageId = await upload(image, niche);
-
-      await safeRequest(
-        "POST",
-        `https://api.printify.com/v1/shops/${PRINTIFY_SHOP_ID}/products.json`,
-        {
-          title: `${product.title} V${i}`,
-          description: product.description,
-          tags: product.tags,
-          blueprint_id: 12,
-          print_provider_id: 29,
-          visible: false,
-          variants: [{ id: variant.id, price: 2900, is_enabled: true }],
-          print_areas: [{
-            variant_ids: [variant.id],
-            placeholders: [{
-              position: "front",
-              images: [{
-                id: imageId,
-                x: 0.5,
-                y: 0.5,
-                scale: 0.85, // 🔥 FIXED: Bigger chest placement
-                angle: 0
-              }]
-            }]
-          }]
-        },
-        headers
-      );
-
-      stats.created++;
-
-      if (i < 3) await sleep(BATCH_DELAY_MS);
-    }
-
-    await sendSlack(`✅ Batch complete\nNiche: *${niche}*\nTotal: 3 designs ready for review.`, channel);
+    await sendSlack(`🔥 Auto-Generated ${product} created for: ${niche}`, channel);
 
   } catch (err) {
-    log("error", "Product failed", { error: err.message });
-    await sendSlack(`❌ PRODUCT ERROR\n${err.message}`, channel);
+    await sendSlack(`❌ Error: ${err.message}`, channel);
   }
 }
 
-// 🔁 AUTO RUN
-let isRunning = false;
-
-setInterval(async () => {
-  if (isRunning) return;
-  isRunning = true;
-
+// 📩 SLACK IMAGE → PRODUCT (Fully SEO Optimized)
+async function handleImageProduct(event) {
+  const channel = event.channel;
   try {
-    log("info", "Scheduled run triggered");
-    await createProduct();
-  } finally {
-    isRunning = false;
-  }
-}, 1000 * 60 * 60 * 12);
+    const file = event.files?.[0];
+    if (!file) return;
 
-// 📊 DAILY REPORT
-setInterval(() => {
-  sendSlack(`📊 Daily Report\nCreated: ${stats.created}`);
-  stats = { created: 0 };
-}, 1000 * 60 * 60 * 24);
+    await sendSlack("📥 Image received. Downloading and analyzing...", channel);
+
+    const res = await axios.get(file.url_private_download, {
+      responseType: "arraybuffer",
+      headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` }
+    });
+
+    const base64 = Buffer.from(res.data).toString("base64");
+
+    // Extract product type and niche from the text you typed with the image
+    const text = event.text ? event.text.toLowerCase() : "custom design";
+    const product =
+      text.includes("mug") ? "mug" :
+      text.includes("hoodie") ? "hoodie" :
+      text.includes("tote") ? "tote" : "t-shirt";
+
+    const config = PRODUCT_MAP[product];
+    
+    // Ask AI to generate the SEO based on what you typed!
+    const productData = await getProduct(text, product);
+    const imageId = await upload(base64);
+    
+    // Grab the real variant ID!
+    const variantId = await getVariantId(config.blueprint, config.provider, config.color, config.size);
+
+    await safeRequest(
+      "POST",
+      `https://api.printify.com/v1/shops/${PRINTIFY_SHOP_ID}/products.json`,
+      {
+        title: productData.title, // Fully SEO Optimized Title!
+        description: productData.description,
+        tags: productData.tags,
+        blueprint_id: config.blueprint,
+        print_provider_id: config.provider,
+        visible: false,
+        variants: [{ id: variantId, price: 2900, is_enabled: true }], // Fixed!
+        print_areas: [{
+          variant_ids: [variantId], // Fixed!
+          placeholders: [{
+            position: "front",
+            images: [{ id: imageId, x: 0.5, y: 0.5, scale: 0.85, angle: 0 }]
+          }]
+        }]
+      },
+      { Authorization: `Bearer ${PRINTIFY_API_TOKEN}` }
+    );
+
+    await sendSlack(`✅ Custom ${product} uploaded and SEO optimized for: "${text}"`, channel);
+  } catch (err) {
+    await sendSlack(`❌ Upload failed: ${err.message}`, channel);
+  }
+}
 
 // 🔥 SLACK EVENTS
 app.post("/slack/events", async (req, res) => {
   const b = req.body;
+  
   if (b.type === "url_verification") return res.send(b.challenge);
   
-  if (req.headers['x-slack-retry-num']) return res.sendStatus(200);
+  // Acknowledge Slack immediately so it doesn't retry
   res.sendStatus(200);
 
   if (b.event?.bot_id) return;
 
-  const originalText = b.event?.text || "";
-  const txt = originalText.toLowerCase();
-  const ch = b.event?.channel;
+  if (b.event?.files) {
+    await handleImageProduct(b.event);
+    return;
+  }
 
-  if (txt) {
-    log("info", "Slack message received", { text: originalText });
-
-    if (txt.includes("post now") || txt.includes("create product")) {
-      await createProduct(ch);
-    } else {
-      const reply = await askGroq(originalText, true);
-      if (reply) await sendSlack(reply, ch);
-    }
+  const txt = b.event?.text?.toLowerCase();
+  if (txt?.includes("create")) {
+    await createProduct(b.event.channel);
   }
 });
 
-// 🔥 GLOBAL ERROR HANDLERS
-process.on("unhandledRejection", async (err) => {
-  log("error", "Unhandled rejection", { error: err.message });
-  await sendSlack(`💥 UNHANDLED ERROR\n${err.message}`);
-});
-
-process.on("uncaughtException", async (err) => {
-  log("error", "Uncaught exception", { error: err.message });
-  await sendSlack(`💥 CRASH\n${err.message}`);
-});
-
 // 🌐 SERVER
-app.get("/", (_, res) => res.send("Ben v4.9.2 running 🚀"));
-
-app.listen(PORT, () => log("info", `Server running on ${PORT}`));
+app.listen(PORT, () => log("info", `Ben FINAL BOSS running 🚀`));
