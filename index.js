@@ -28,8 +28,8 @@ function log(level, message, meta = {}) {
   }));
 }
 
-// ⚠️ ENV VALIDATION
-if (!GROQ_API_KEY || !GEMINI_API_KEY || !PRINTIFY_API_TOKEN || !PRINTIFY_SHOP_ID) {
+// ⚠️ ENV VALIDATION (FIXED)
+if (!GROQ_API_KEY || !GEMINI_API_KEY || !PRINTIFY_API_TOKEN || !PRINTIFY_SHOP_ID || !FAL_KEY) {
   log("error", "Missing ENV variables");
 }
 
@@ -40,16 +40,34 @@ const BATCH_DELAY_MS = 5000;
 // 💤 Sleep
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// 📢 SLACK
+// 🔁 RETRY HELPER (NEW)
+async function retry(fn, retries = 2) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (i === retries) throw err;
+      log("warn", "Retrying...", { attempt: i + 1 });
+      await sleep(2000);
+    }
+  }
+}
+
+// 📢 SLACK (FIXED RESPONSE CHECK)
 async function sendSlack(text, channel = "#general") {
   if (!SLACK_BOT_TOKEN) return;
 
   try {
-    await axios.post(
+    const res = await axios.post(
       "https://slack.com/api/chat.postMessage",
       { channel, text },
       { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } }
     );
+
+    if (!res.data.ok) {
+      log("error", "Slack API error", { response: res.data });
+    }
+
   } catch (err) {
     log("error", "Slack send failed", { error: err.message });
   }
@@ -87,10 +105,31 @@ async function safeRequest(method, url, data = null, headers = {}, extraConfig =
   }
 }
 
-// 🧠 STATE & MEMORY
+// 🧠 STATE & MEMORY (IMPROVED PERSISTENCE)
 let chatHistory = [];
 let usedNiches = new Set();
 let stats = { created: 0 };
+
+const NICHE_FILE = "./niches.json";
+
+// Load niches
+try {
+  if (fs.existsSync(NICHE_FILE)) {
+    const saved = JSON.parse(fs.readFileSync(NICHE_FILE, "utf8"));
+    usedNiches = new Set(saved);
+  }
+} catch (err) {
+  log("warn", "Failed loading niches", { error: err.message });
+}
+
+// Save niches
+function saveNiches() {
+  try {
+    fs.writeFileSync(NICHE_FILE, JSON.stringify([...usedNiches]));
+  } catch (err) {
+    log("warn", "Failed saving niches", { error: err.message });
+  }
+}
 
 // 🎨 DESIGN STYLE
 let designSpecs = "Minimalist, bold typography, clean layout, flat vector, white background.";
@@ -100,11 +139,12 @@ try {
   }
 } catch {}
 
-// 🤖 GROQ & PERSONALITY
+// 🤖 GROQ & PERSONALITY (UNCHANGED)
 const BEN_PERSONA = `You are Ben, a warm, approachable, and enthusiastic AI business operator. Your goal is to manage and automate an Etsy Print-on-Demand business. 
 You know your human partner is a talented professional photographer, graphic designer, and video editor. Your job is to handle the heavy lifting—market research, SEO, bulk AI design generation, and Printify uploads—so they can review and approve your drafts. 
 Be supportive, knowledgeable, and friendly, but keep your responses concise and actionable.`;
 
+// 🤖 GROQ CALL
 async function askGroq(prompt, isChat = false) {
   try {
     const messages = [];
@@ -143,25 +183,47 @@ async function askGroq(prompt, isChat = false) {
   }
 }
 
-// 🎯 NICHE
+// 🎯 NICHE (FIXED NORMALIZATION + SAVE)
+const normalize = (s) => s.toLowerCase().trim();
+
 async function getNiche() {
   for (let i = 0; i < 5; i++) {
     const n = (await askGroq("Give ONE profitable t-shirt niche.", false))?.trim();
-    if (n && !usedNiches.has(n)) {
-      usedNiches.add(n);
+    const key = normalize(n);
+
+    if (n && !usedNiches.has(key)) {
+      usedNiches.add(key);
+      saveNiches();
       return n;
     }
   }
   return "minimalist stoic quote";
 }
 
-// 🧾 PRODUCT DATA
+// 🧾 PRODUCT DATA (UNCHANGED)
 async function getProduct(niche) {
-  const raw = await askGroq(`Create Etsy listing JSON for "${niche}"`, false);
+  const raw = await askGroq(`Create Etsy listing JSON for "${niche}"
+WARNING: Return ONLY raw JSON. No markdown formatting, no backticks, no introductory text. 
+Strict Format:
+{"title": "...","description": "...","tags": ["","","","","","","","","",""]}`, false);
+  
   try {
-    return JSON.parse(raw.match(/\{[\s\S]*\}/)[0]);
-  } catch {
-    throw new Error("Bad product JSON");
+    if (!raw) throw new Error("Groq returned an empty response");
+    
+    const cleanText = raw.replace(/```json/g, '').replace(/```/g, '').trim();
+    const startIndex = cleanText.indexOf('{');
+    const endIndex = cleanText.lastIndexOf('}');
+    
+    if (startIndex === -1 || endIndex === -1) {
+      throw new Error("No JSON brackets found in output");
+    }
+    
+    const jsonString = cleanText.substring(startIndex, endIndex + 1);
+    return JSON.parse(jsonString);
+
+  } catch (err) {
+    log("error", "JSON Parse Failed", { rawOutput: raw, error: err.message });
+    throw new Error("Failed to read product data from AI.");
   }
 }
 
@@ -212,7 +274,7 @@ async function fal(prompt) {
   return Buffer.from(img).toString("base64");
 }
 
-// 🖼️ PLACEHOLDER (Restored Pop Culture Quotes)
+// 🖼️ PLACEHOLDER (UNCHANGED - YOUR STRATEGY KEPT)
 async function placeholder(niche) {
   const quotes = [
     "It's a trap!", "Affirmative.", "Game over, man!", "Do a barrel roll!", 
@@ -227,15 +289,15 @@ async function placeholder(niche) {
   return Buffer.from(img).toString("base64");
 }
 
-// 🧠 IMAGE ROUTER
+// 🧠 IMAGE ROUTER (WITH RETRY)
 async function generateImage(prompt, niche) {
   try {
     log("info", "Gemini start");
-    return await gemini(prompt);
+    return await retry(() => gemini(prompt));
   } catch {
     try {
       log("warn", "FAL fallback");
-      return await fal(prompt);
+      return await retry(() => fal(prompt));
     } catch {
       log("warn", "Placeholder fallback");
       return await placeholder(niche);
@@ -243,22 +305,23 @@ async function generateImage(prompt, niche) {
   }
 }
 
-// 📤 UPLOAD
+// 📤 UPLOAD (WITH RETRY)
 async function upload(image, niche) {
-  const res = await safeRequest(
-    "POST",
-    "https://api.printify.com/v1/uploads/images.json",
-    {
-      file_name: `${niche.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${Date.now()}.png`,
-      contents: image
-    },
-    { Authorization: `Bearer ${PRINTIFY_API_TOKEN}` }
-  );
-
-  return res.id;
+  return await retry(async () => {
+    const res = await safeRequest(
+      "POST",
+      "https://api.printify.com/v1/uploads/images.json",
+      {
+        file_name: `${niche.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${Date.now()}.png`,
+        contents: image
+      },
+      { Authorization: `Bearer ${PRINTIFY_API_TOKEN}` }
+    );
+    return res.id;
+  });
 }
 
-// 🛒 PRODUCT CREATOR
+// 🛒 PRODUCT CREATOR (IMPROVED VARIANT SELECTION)
 async function createProduct(channel = "#general") {
   try {
     await sendSlack("🚀 Starting product workflow...", channel);
@@ -277,7 +340,10 @@ async function createProduct(channel = "#general") {
       headers
     );
 
-    const variant = catalog.variants.find(v => v.is_enabled);
+    const variant = catalog.variants.find(v => 
+      v.is_enabled && v.title.includes("Black") && v.title.includes("M")
+    ) || catalog.variants.find(v => v.is_enabled);
+
     if (!variant) throw new Error("No variant");
 
     for (let i = 1; i <= 3; i++) {
@@ -309,7 +375,7 @@ async function createProduct(channel = "#general") {
                 id: imageId,
                 x: 0.5,
                 y: 0.5,
-                scale: 0.6, // Perfect 60% chest scale!
+                scale: 0.6,
                 angle: 0
               }]
             }]
@@ -331,10 +397,19 @@ async function createProduct(channel = "#general") {
   }
 }
 
-// 🔁 AUTO RUN
-setInterval(() => {
-  log("info", "Scheduled run triggered");
-  createProduct();
+// 🔁 AUTO RUN (PROTECTED)
+let isRunning = false;
+
+setInterval(async () => {
+  if (isRunning) return;
+  isRunning = true;
+
+  try {
+    log("info", "Scheduled run triggered");
+    await createProduct();
+  } finally {
+    isRunning = false;
+  }
 }, 1000 * 60 * 60 * 12);
 
 // 📊 DAILY REPORT
@@ -343,7 +418,7 @@ setInterval(() => {
   stats = { created: 0 };
 }, 1000 * 60 * 60 * 24);
 
-// 🔥 SLACK EVENTS
+// 🔥 SLACK EVENTS (UNCHANGED)
 app.post("/slack/events", async (req, res) => {
   const b = req.body;
   if (b.type === "url_verification") return res.send(b.challenge);
@@ -369,7 +444,7 @@ app.post("/slack/events", async (req, res) => {
   }
 });
 
-// 🔥 GLOBAL ERROR HANDLERS
+// 🔥 GLOBAL ERROR HANDLERS (UNCHANGED)
 process.on("unhandledRejection", async (err) => {
   log("error", "Unhandled rejection", { error: err.message });
   await sendSlack(`💥 UNHANDLED ERROR\n${err.message}`);
@@ -381,6 +456,6 @@ process.on("uncaughtException", async (err) => {
 });
 
 // 🌐 SERVER
-app.get("/", (_, res) => res.send("Ben v4.6 running 🚀"));
+app.get("/", (_, res) => res.send("Ben v4.8 running 🚀"));
 
 app.listen(PORT, () => log("info", `Server running on ${PORT}`));
